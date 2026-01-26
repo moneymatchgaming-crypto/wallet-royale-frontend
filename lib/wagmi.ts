@@ -10,9 +10,14 @@ export const config = createConfig({
   ],
   transports: {
     [baseSepolia.id]: http(
-      process.env.NEXT_PUBLIC_ALCHEMY_KEY
-        ? `https://base-sepolia.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_KEY}`
-        : 'https://sepolia.base.org'
+      // Use public RPC to avoid rate limits and CORS issues
+      'https://sepolia.base.org',
+      {
+        // Add retry and timeout configuration
+        retryCount: 3,
+        retryDelay: 1000,
+        timeout: 10000,
+      }
     ),
   },
 });

@@ -34,7 +34,7 @@ export default function GameLobby() {
   const [mounted, setMounted] = useState(false);
   const [currentGameId, setCurrentGameId] = useState<bigint>(0n);
   const [games, setGames] = useState<Game[]>([]);
-  const [filter, setFilter] = useState<'all' | 'open' | 'live' | 'finished'>('open');
+  const [filter, setFilter] = useState<'all' | 'open' | 'starting' | 'live' | 'finished'>('open');
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Only show connection-dependent UI after mount to avoid hydration mismatch
@@ -49,14 +49,7 @@ export default function GameLobby() {
     functionName: 'currentGameId',
   });
 
-  // Check if connected wallet is the contract owner
-  const { data: ownerAddress } = useReadContract({
-    address: CONTRACT_ADDRESS,
-    abi: contractABI,
-    functionName: 'owner',
-  });
-
-  const isOwner = mounted && isConnected && address && ownerAddress && address.toLowerCase() === (ownerAddress as string).toLowerCase();
+  // Anyone can create a game now (no owner check needed)
 
   useEffect(() => {
     if (gameId) {
@@ -97,10 +90,19 @@ export default function GameLobby() {
     const deadline = Number(game.registrationDeadline?.toString() || '0');
     const now = Math.floor(Date.now() / 1000);
     const deadlinePassed = deadline > 0 && deadline < now;
+    const playerCount = Number(game.playerCount?.toString() || '0');
+    const minPlayers = Number(game.minPlayers?.toString() || '0');
+    const canStart = playerCount >= minPlayers; // Game can actually start
     
     if (filter === 'open') {
-      // Only show games that are not finalized, not cancelled, not started, and deadline hasn't passed
+      // Show games that are not finalized, not cancelled, not started, deadline hasn't passed
+      // Underfilled games past deadline should NOT appear here - they go to "All" or "Finished" only
       return !game.finalized && !game.cancelled && startTime === 0n && !deadlinePassed;
+    }
+    if (filter === 'starting') {
+      // Show games where deadline passed, game hasn't started yet, AND has enough players to start
+      // Underfilled games past deadline should NOT appear here - they go to "All" or "Finished" only
+      return !game.finalized && !game.cancelled && startTime === 0n && deadlinePassed && canStart;
     }
     if (filter === 'live') return game.active && !game.finalized && startTime > 0n;
     if (filter === 'finished') return game.finalized || game.cancelled;
@@ -115,14 +117,14 @@ export default function GameLobby() {
           <h2 className="text-3xl font-bold text-white mb-2 font-sans">Join Games</h2>
           <p className="text-gray-500 text-sm font-sans">Select a game to join or create a new one</p>
         </div>
-        {isOwner && (
-          <button 
-            onClick={() => setShowCreateModal(true)}
-            className="px-6 py-3 bg-gradient-to-r from-purple-600 to-cyan-500 text-white hover:from-purple-500 hover:to-cyan-400 transition-all font-bold rounded-2xl shadow-lg shadow-purple-500/50 font-sans"
-          >
-            Create Game
-          </button>
-        )}
+            {mounted && isConnected && (
+              <button 
+                onClick={() => setShowCreateModal(true)}
+                className="px-6 py-3 bg-gradient-to-r from-purple-600 to-cyan-500 text-white hover:from-purple-500 hover:to-cyan-400 transition-all font-bold rounded-2xl shadow-lg shadow-purple-500/50 font-sans"
+              >
+                Create Game
+              </button>
+            )}
       </div>
 
       {/* Create Game Modal */}
@@ -165,6 +167,16 @@ export default function GameLobby() {
             }`}
           >
             Open
+          </button>
+          <button
+            onClick={() => setFilter('starting')}
+            className={`px-5 py-2.5 text-sm font-semibold rounded-2xl transition-all font-sans ${
+              filter === 'starting'
+                ? 'bg-gradient-to-r from-yellow-500 to-orange-500 text-white shadow-lg shadow-yellow-500/50'
+                : 'bg-gray-800 border border-gray-700 text-gray-400 hover:text-white hover:border-yellow-500/50'
+            }`}
+          >
+            Starting
           </button>
           <button
             onClick={() => setFilter('live')}

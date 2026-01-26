@@ -9,12 +9,16 @@ interface StartGameButtonProps {
   gameId: number;
   reward: bigint;
   timeRemaining: number;
+  entryFee?: bigint;
+  userStatus?: 'not_registered' | 'registered' | 'eliminated';
 }
 
 export default function StartGameButton({
   gameId,
   reward,
   timeRemaining,
+  entryFee,
+  userStatus,
 }: StartGameButtonProps) {
   const [countdown, setCountdown] = useState<string>('');
 
@@ -43,17 +47,23 @@ export default function StartGameButton({
   }, [timeRemaining]);
 
   const handleStart = () => {
+    // If user is not registered, they need to pay entry fee
+    const value = (userStatus === 'not_registered' && entryFee) ? entryFee : undefined;
+    
     writeContract({
       address: CONTRACT_ADDRESS,
       abi: contractABI,
       functionName: 'startGame',
       args: [BigInt(gameId)],
+      value: value, // Send entry fee if not registered
     });
   };
 
   if (timeRemaining <= 0) return null;
 
   const rewardEth = formatEther(reward);
+  const needsPayment = userStatus === 'not_registered' && entryFee;
+  const entryFeeEth = entryFee ? formatEther(entryFee) : '0';
 
   return (
     <div className="space-y-2">
@@ -66,6 +76,8 @@ export default function StartGameButton({
           ? 'Starting Game...'
           : isSuccess
           ? 'Game Started!'
+          : needsPayment
+          ? `Start Game (Pay ${entryFeeEth} ETH) & Earn ${rewardEth} ETH`
           : `Start Game & Earn ${rewardEth} ETH`}
       </button>
       <p className="text-xs text-center text-yellow-400">

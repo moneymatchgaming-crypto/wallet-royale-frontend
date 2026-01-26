@@ -1,10 +1,9 @@
 'use client';
 
-import { Address } from '@coinbase/onchainkit/identity';
-import { formatEther, Address as ViemAddress } from 'viem';
+import { formatEther, type Address } from 'viem';
 
 interface PlayerSquareProps {
-  player: ViemAddress;
+  player: Address;
   rank: number;
   isEliminated: boolean;
   squareIndex: number;
@@ -38,8 +37,8 @@ export default function PlayerSquare({
         <div className="text-[#9ca3af] text-[10px]">Eliminated</div>
       ) : (
         <>
-          <div className="text-white text-[11px] font-medium mb-1 truncate w-full text-center">
-            <Address address={player} />
+          <div className="text-white text-[11px] font-medium mb-1 truncate w-full text-center" title={player}>
+            {`${player.slice(0, 6)}...${player.slice(-4)}`}
           </div>
           <div className={`font-semibold text-[12px] mb-1 ${gainColor}`}>
             {gainSign}{gainPercent.toFixed(2)}%

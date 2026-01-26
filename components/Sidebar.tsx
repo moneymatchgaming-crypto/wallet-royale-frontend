@@ -4,18 +4,25 @@ import { useEffect, useState } from 'react';
 import { formatEther } from 'viem';
 import StartGameButton from './StartGameButton';
 import RegistrationModal from './RegistrationModal';
+import PrizePoolBreakdown from './PrizePoolBreakdown';
+import FinalizeRoundButton from './FinalizeRoundButton';
+import CancelGameButton from './CancelGameButton';
 
 interface SidebarProps {
   gameId: number;
   currentRound: number;
   totalRounds: number;
+  roundDuration: number; // Duration of each round in seconds
   timeRemaining: number;
   prizePool: bigint | undefined;
+  totalPlayers: number; // Total number of players registered
+  activePlayers: number | undefined; // Number of players still alive (undefined if game hasn't started)
   userStatus: 'not_registered' | 'registered' | 'eliminated';
   entryFee: bigint | undefined;
   canStart: boolean;
   startReward: bigint | undefined;
   rewardTimeRemaining: number;
+  roundShouldHaveEnded?: boolean; // True if round time expired but hasn't been finalized yet
   onRegistrationSuccess?: () => void;
 }
 
@@ -23,16 +30,22 @@ export default function Sidebar({
   gameId,
   currentRound,
   totalRounds,
+  roundDuration,
   timeRemaining,
   prizePool,
+  totalPlayers,
+  activePlayers,
   userStatus,
   entryFee,
   canStart,
   startReward,
   rewardTimeRemaining,
+  roundShouldHaveEnded,
   onRegistrationSuccess,
+  eliminatedPlayers = [],
 }: SidebarProps) {
   const [showRegistration, setShowRegistration] = useState(false);
+  const [showPrizePoolBreakdown, setShowPrizePoolBreakdown] = useState(false);
   const [countdown, setCountdown] = useState<string>('');
 
   // Debug: Log when showRegistration changes
@@ -69,19 +82,31 @@ export default function Sidebar({
 
   return (
     <div className="w-80 space-y-4">
-      {/* Prize Pool - Yellow border like reference */}
-      <div className="bg-[#1a1a1a] border border-[#fbbf24] p-3">
+      {/* Prize Pool - Yellow border like reference - Clickable */}
+      <button
+        onClick={() => setShowPrizePoolBreakdown(true)}
+        className="w-full bg-[#1a1a1a] border border-[#fbbf24] p-3 text-left hover:border-[#fbbf24]/80 transition-colors cursor-pointer"
+      >
         <div className="text-xs text-[#9ca3af] mb-1">Prize Pool</div>
         <div className="text-xl font-semibold text-white">
           {prizePool !== undefined ? formatEther(prizePool) : '0'} ETH
         </div>
-      </div>
+        <div className="text-xs text-[#9ca3af] mt-1">Click to view breakdown</div>
+      </button>
 
       {/* Time Remaining */}
       {timeRemaining > 0 && (
         <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
           <div className="text-xs text-[#9ca3af] mb-1">Time remaining</div>
           <div className="text-lg font-semibold text-white font-mono">{countdown}</div>
+        </div>
+      )}
+      
+      {/* Round Pending Finalization Warning */}
+      {roundShouldHaveEnded && (
+        <div className="bg-yellow-900/20 border border-yellow-500/50 p-3">
+          <div className="text-xs text-yellow-400 mb-1">Round Ended</div>
+          <div className="text-sm text-yellow-300">Waiting for round finalization...</div>
         </div>
       )}
 
@@ -92,6 +117,31 @@ export default function Sidebar({
           <div className="text-lg font-semibold text-white">{currentRound} / {totalRounds}</div>
         </div>
       )}
+
+      {/* Round Duration */}
+      {currentRound > 0 && (
+        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
+          <div className="text-xs text-[#9ca3af] mb-1">Round Duration</div>
+          <div className="text-lg font-semibold text-white">
+            {roundDuration >= 3600 
+              ? `${Math.floor(roundDuration / 3600)}h ${Math.floor((roundDuration % 3600) / 60)}m`
+              : `${Math.floor(roundDuration / 60)}m`
+            }
+          </div>
+        </div>
+      )}
+
+      {/* Players Info */}
+      <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
+        <div className="text-xs text-[#9ca3af] mb-1">Players</div>
+        <div className="text-lg font-semibold text-white">
+          {activePlayers !== undefined ? (
+            <span>{activePlayers} / {totalPlayers} survivors</span>
+          ) : (
+            <span>{totalPlayers} registered</span>
+          )}
+        </div>
+      </div>
 
       {/* Easy Deposit Button - Most Important */}
       {userStatus === 'not_registered' && entryFee !== undefined && (
@@ -126,11 +176,60 @@ export default function Sidebar({
 
       {/* Start Game Button */}
       {canStart && userStatus === 'registered' && startReward !== undefined && (
-        <StartGameButton
-          gameId={gameId}
-          reward={startReward}
-          timeRemaining={rewardTimeRemaining}
+          <StartGameButton
+            gameId={gameId}
+            reward={startReward}
+            timeRemaining={rewardTimeRemaining}
+            entryFee={entryFee}
+            userStatus={userStatus}
+          />
+      )}
+
+      {showPrizePoolBreakdown && (
+        <PrizePoolBreakdown
+          prizePool={prizePool}
+          entryFee={entryFee}
+          totalPlayers={totalPlayers}
+          onClose={() => setShowPrizePoolBreakdown(false)}
         />
+      )}
+
+      {/* Finalize Round Button - Show when round should have ended */}
+      {roundShouldHaveEnded && eliminatedPlayers.length > 0 && (
+        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-4 rounded-lg">
+          <div className="text-sm font-semibold text-white mb-2">
+            Finalize Round {currentRound}
+          </div>
+          <div className="text-xs text-[#9ca3af] mb-3">
+            Earn a reward for finalizing this round! You'll receive 1.5× your gas cost.
+          </div>
+          <FinalizeRoundButton
+            gameId={gameId}
+            roundNumber={currentRound}
+            eliminatedPlayers={eliminatedPlayers}
+            onSuccess={() => {
+              // Refetch game data after successful finalization
+              if (onRegistrationSuccess) {
+                onRegistrationSuccess();
+              }
+            }}
+          />
+        </div>
+      )}
+
+      {/* Cancel Game Button - shown for games that haven't started */}
+      {currentRound === 0 && (
+        <div className="mb-6">
+          <CancelGameButton
+            gameId={gameId}
+            onCancelSuccess={() => {
+              // Refetch game data after successful cancellation
+              if (onRegistrationSuccess) {
+                onRegistrationSuccess();
+              }
+            }}
+          />
+        </div>
       )}
 
       {showRegistration && (
