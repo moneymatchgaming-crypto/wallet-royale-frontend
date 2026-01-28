@@ -108,7 +108,6 @@ export default function GamePage() {
       platformFee: gameArray[15] || 0n,
       totalGasReimbursed: gameArray[16] || 0n,
       totalGasSpent: gameArray[17] || 0n,
-      totalGasSpent: gameArray[17] || 0n,
     };
   }, [gameArray]);
 
@@ -296,7 +295,6 @@ export default function GamePage() {
             // This is the winner
             winnerAddress = player;
             winnerGain = gainPercent;
-            foundWinner = player;
           } else if (!isAlive && gainPercent !== null) {
             // This is a loser (eliminated player)
             losersList.push({ address: player, gainPercent });
@@ -621,6 +619,9 @@ export default function GamePage() {
               canStart={canStart}
               startReward={reward}
               rewardTimeRemaining={Number(rewardTimeRemaining)}
+              gameStatus={status as 'REGISTRATION_OPEN' | 'READY_TO_START' | 'LIVE' | 'FINALIZED' | 'CANCELLED' | 'UNDERFILLED'}
+              registrationDeadline={Number(game.registrationDeadline)}
+              minPlayers={Number(game.minPlayers)}
               onRegistrationSuccess={() => {
                 refetchPlayer();
                 refetchGame();
@@ -647,7 +648,6 @@ export default function GamePage() {
               startReward={0n}
               rewardTimeRemaining={0}
               roundShouldHaveEnded={roundShouldHaveEnded}
-              eliminatedPlayers={eliminatedPlayers}
               onRegistrationSuccess={() => {
                 refetchPlayer();
                 refetchGame();

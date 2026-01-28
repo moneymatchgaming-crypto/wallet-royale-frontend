@@ -80,8 +80,8 @@ export default function GameLobby() {
     };
 
     fetchGames();
-    // Only refresh every 30s for better performance (was 10s)
-    const interval = setInterval(fetchGames, 30000);
+    // OPTIMIZATION: Reduced refresh rate from 30s to 60s for better performance
+    const interval = setInterval(fetchGames, 60000);
     return () => clearInterval(interval);
   }, [currentGameId, filter]);
 

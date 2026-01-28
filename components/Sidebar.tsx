@@ -23,6 +23,9 @@ interface SidebarProps {
   startReward: bigint | undefined;
   rewardTimeRemaining: number;
   roundShouldHaveEnded?: boolean; // True if round time expired but hasn't been finalized yet
+  gameStatus?: 'REGISTRATION_OPEN' | 'READY_TO_START' | 'LIVE' | 'FINALIZED' | 'CANCELLED' | 'UNDERFILLED';
+  registrationDeadline?: number;
+  minPlayers?: number;
   onRegistrationSuccess?: () => void;
 }
 
@@ -41,8 +44,10 @@ export default function Sidebar({
   startReward,
   rewardTimeRemaining,
   roundShouldHaveEnded,
+  gameStatus,
+  registrationDeadline,
+  minPlayers,
   onRegistrationSuccess,
-  eliminatedPlayers = [],
 }: SidebarProps) {
   const [showRegistration, setShowRegistration] = useState(false);
   const [showPrizePoolBreakdown, setShowPrizePoolBreakdown] = useState(false);
@@ -195,7 +200,7 @@ export default function Sidebar({
       )}
 
       {/* Finalize Round Button - Show when round should have ended */}
-      {roundShouldHaveEnded && eliminatedPlayers.length > 0 && (
+      {roundShouldHaveEnded && (
         <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-4 rounded-lg">
           <div className="text-sm font-semibold text-white mb-2">
             Finalize Round {currentRound}
@@ -206,7 +211,6 @@ export default function Sidebar({
           <FinalizeRoundButton
             gameId={gameId}
             roundNumber={currentRound}
-            eliminatedPlayers={eliminatedPlayers}
             onSuccess={() => {
               // Refetch game data after successful finalization
               if (onRegistrationSuccess) {
@@ -218,10 +222,14 @@ export default function Sidebar({
       )}
 
       {/* Cancel Game Button - shown for games that haven't started */}
-      {currentRound === 0 && (
+      {currentRound === 0 && gameStatus && registrationDeadline !== undefined && minPlayers !== undefined && (
         <div className="mb-6">
           <CancelGameButton
             gameId={gameId}
+            gameStatus={gameStatus}
+            registrationDeadline={registrationDeadline}
+            minPlayers={minPlayers}
+            playerCount={totalPlayers}
             onCancelSuccess={() => {
               // Refetch game data after successful cancellation
               if (onRegistrationSuccess) {

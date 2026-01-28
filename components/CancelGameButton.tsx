@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount } from 'wagmi';
 import { formatEther } from 'viem';
 import { CONTRACT_ADDRESS, contractABI } from '@/lib/contract';
@@ -9,11 +9,19 @@ import { baseSepolia } from 'viem/chains';
 
 interface CancelGameButtonProps {
   gameId: number;
+  gameStatus: 'REGISTRATION_OPEN' | 'READY_TO_START' | 'LIVE' | 'FINALIZED' | 'CANCELLED' | 'UNDERFILLED';
+  registrationDeadline: number;
+  minPlayers: number;
+  playerCount: number;
   onCancelSuccess: () => void;
 }
 
 export default function CancelGameButton({
   gameId,
+  gameStatus,
+  registrationDeadline,
+  minPlayers,
+  playerCount,
   onCancelSuccess,
 }: CancelGameButtonProps) {
   const { address } = useAccount();
@@ -23,23 +31,37 @@ export default function CancelGameButton({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
   });
 
-  // Fetch cancel reward and eligibility
+  // OPTIMIZATION: Only check if game might be cancellable
+  const mightBeCancellable = 
+    gameStatus === 'UNDERFILLED' || 
+    (gameStatus === 'REGISTRATION_OPEN' && playerCount < minPlayers);
+
+  // Fetch cancel reward only if potentially cancellable
   useEffect(() => {
+    if (!address || !mightBeCancellable) {
+      setCancelReward(null);
+      setCanCancel(false);
+      return;
+    }
+
     const fetchCancelInfo = async () => {
-      if (!address) {
-        setCancelReward(null);
-        setCanCancel(false);
+      // Don't check if deadline hasn't passed yet
+      const now = Math.floor(Date.now() / 1000);
+      const GRACE_PERIOD = 3600; // 1 hour
+      if (now < registrationDeadline + GRACE_PERIOD) {
         return;
       }
 
       setLoadingReward(true);
       setError(null);
+      
       try {
         const publicClient = createPublicClient({
           chain: baseSepolia,
@@ -56,22 +78,29 @@ export default function CancelGameButton({
         setCancelReward(reward);
         setCanCancel(canCancelGame);
       } catch (err: any) {
-        // Silently handle errors - game might not be eligible for cancellation
-        // This is expected for games that are active, already started, or don't exist
         console.debug('Game not eligible for cancellation:', err.message);
         setCancelReward(null);
         setCanCancel(false);
-        setError(null); // Don't show error to user, just hide the button
+        setError(null);
       } finally {
         setLoadingReward(false);
       }
     };
 
     fetchCancelInfo();
-    // Refetch every 30 seconds to update eligibility
-    const interval = setInterval(fetchCancelInfo, 30000);
-    return () => clearInterval(interval);
-  }, [gameId, address]);
+    
+    // OPTIMIZATION: Only poll if close to being cancellable
+    // Stop polling once we know it's cancellable or definitely not cancellable
+    if (!canCancel && mightBeCancellable) {
+      intervalRef.current = setInterval(fetchCancelInfo, 60000); // 60s instead of 30s
+    }
+    
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, [gameId, address, mightBeCancellable, registrationDeadline, canCancel, playerCount, minPlayers]);
 
   const handleCancel = () => {
     if (!address) {
@@ -148,8 +177,9 @@ export default function CancelGameButton({
 
   const isProcessing = isPending || isConfirming || loadingReward;
 
-  if (!canCancel && !loadingReward) {
-    return null; // Don't show button if game can't be cancelled
+  // OPTIMIZATION: Hide button immediately if conditions aren't met
+  if (!mightBeCancellable || (!canCancel && !loadingReward)) {
+    return null;
   }
 
   return (
