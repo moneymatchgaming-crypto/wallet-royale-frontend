@@ -179,8 +179,9 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Start Game Button */}
-      {canStart && userStatus === 'registered' && startReward !== undefined && (
+      {/* Start Game Button - Anyone can start, not just registered players */}
+      {/* Show if game can start, even if reward is 0 or expired (someone needs to start it) */}
+      {canStart && startReward !== undefined && (
           <StartGameButton
             gameId={gameId}
             reward={startReward}

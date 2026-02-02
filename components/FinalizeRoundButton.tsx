@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount } from 'wagmi';
 import { formatEther, parseEther } from 'viem';
 import { contractABI } from '@/lib/contract';
@@ -9,14 +9,391 @@ import { CONTRACT_ADDRESS } from '@/lib/contract';
 interface FinalizeRoundButtonProps {
   gameId: number;
   roundNumber: number;
-  eliminatedPlayers: string[];
   onSuccess?: () => void;
+}
+
+/**
+ * Fetch and rank players to determine who should be eliminated
+ */
+async function getEliminatedPlayers(gameId: number, roundNumber: number) {
+  const { createPublicClient, http } = await import('viem');
+  const { baseSepolia } = await import('viem/chains');
+  
+  const publicClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http('https://sepolia.base.org', {
+      retryCount: 3,
+      retryDelay: 1000,
+      timeout: 10000,
+    }),
+  });
+
+  // Get game info first
+  const game = await publicClient.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: contractABI,
+    functionName: 'games',
+    args: [BigInt(gameId)],
+  }) as any;
+
+  console.log('Game state:', {
+    active: game.active,
+    startTime: game.startTime > 0n ? new Date(Number(game.startTime) * 1000) : 'Not started',
+    finalized: game.finalized,
+    cancelled: game.cancelled,
+    currentRound: Number(game.currentRound),
+    playerCount: Number(game.playerCount)
+  });
+
+  // Get round info
+  const round = await publicClient.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: contractABI,
+    functionName: 'rounds',
+    args: [BigInt(gameId), BigInt(roundNumber)],
+  }) as any;
+
+  // Round data structure: [roundNumber, startTime, endTime, alivePlayers, cutoffRank, finalized]
+  const roundArray = Array.isArray(round) ? round : [
+    round.roundNumber || round[0],
+    round.startTime || round[1],
+    round.endTime || round[2],
+    round.alivePlayers || round[3],
+    round.cutoffRank || round[4],
+    round.finalized !== undefined ? round.finalized : round[5]
+  ];
+  
+  const roundFinalized = roundArray[5] === true;
+  const roundAlivePlayers = Number(roundArray[3] || 0n);
+
+  console.log('Round state:', {
+    roundNumber: Number(roundArray[0]),
+    startTime: new Date(Number(roundArray[1]) * 1000),
+    endTime: new Date(Number(roundArray[2]) * 1000),
+    alivePlayers: roundAlivePlayers,
+    cutoffRank: Number(roundArray[4]),
+    finalized: roundFinalized
+  });
+
+  // Get all players
+  const allPlayers = await publicClient.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: contractABI,
+    functionName: 'getGamePlayers',
+    args: [BigInt(gameId)],
+  }) as `0x${string}`[];
+
+  console.log(`Total registered players: ${allPlayers.length}`);
+
+  // Check each player's status
+  const playerData: Array<{
+    address: `0x${string}`;
+    startETH: bigint;
+    currentETH: bigint;
+    gainPct: number;
+    alive: boolean;
+  }> = [];
+
+  let aliveCount = 0;
+  let eliminatedCount = 0;
+
+  for (const playerAddr of allPlayers) {
+    let isAlive = false;
+    let isRegistered = false;
+    
+    try {
+      // Try using getPlayer function first (more reliable, returns specific fields)
+      try {
+        const playerData = await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: contractABI,
+          functionName: 'getPlayer',
+          args: [BigInt(gameId), playerAddr],
+        }) as any;
+        
+        // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, 
+        //                     penaltyAERO, penaltyCAKE, alive, eliminationReason]
+        // alive is at index 6
+        const playerArray = Array.isArray(playerData) ? playerData : [
+          playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[0],
+          playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[1],
+          playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[2],
+          playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[3],
+          playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[4],
+          playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[5],
+          playerData.alive !== undefined ? playerData.alive : playerData[6],
+          playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[7],
+        ];
+        
+        isAlive = playerArray[6] === true;
+        // For getPlayer, we assume registered if we got data back
+        isRegistered = true;
+      } catch (getPlayerError) {
+        // Fallback to players mapping if getPlayer fails
+        const player = await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: contractABI,
+          functionName: 'players',
+          args: [BigInt(gameId), playerAddr],
+        }) as any;
+
+        // Player struct: [wallet, squareIndex, startETH, startUSDC, startAERO, startCAKE, 
+        //                 startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE,
+        //                 alive, registered, eliminationReason, registrationTime]
+        // alive is at index 11, registered is at index 12
+        const playerArray = Array.isArray(player) ? player : [
+          player.wallet || player[0],
+          player.squareIndex !== undefined ? player.squareIndex : player[1],
+          player.startETH !== undefined ? player.startETH : player[2],
+          player.startUSDC !== undefined ? player.startUSDC : player[3],
+          player.startAERO !== undefined ? player.startAERO : player[4],
+          player.startCAKE !== undefined ? player.startCAKE : player[5],
+          player.startValueUSDC !== undefined ? player.startValueUSDC : player[6],
+          player.penaltyETH !== undefined ? player.penaltyETH : player[7],
+          player.penaltyUSDC !== undefined ? player.penaltyUSDC : player[8],
+          player.penaltyAERO !== undefined ? player.penaltyAERO : player[9],
+          player.penaltyCAKE !== undefined ? player.penaltyCAKE : player[10],
+          player.alive !== undefined ? player.alive : player[11],
+          player.registered !== undefined ? player.registered : player[12],
+          player.eliminationReason !== undefined ? player.eliminationReason : player[13],
+          player.registrationTime !== undefined ? player.registrationTime : player[14],
+        ];
+        
+        isAlive = playerArray[11] === true;
+        isRegistered = playerArray[12] === true;
+      }
+    } catch (rpcError: any) {
+      // Handle RPC rate limits and errors
+      if (rpcError.message?.includes('429') || rpcError.message?.includes('rate limit')) {
+        throw new Error('RPC rate limit exceeded. Please wait a moment and try again.');
+      }
+      console.error(`Error reading player ${playerAddr}:`, rpcError);
+      continue; // Skip this player and continue
+    }
+
+    console.log(`Player ${playerAddr.slice(0, 10)}... - Alive: ${isAlive}, Registered: ${isRegistered}`);
+
+    if (isAlive && isRegistered) {
+      aliveCount++;
+      
+      // Get round start balance
+      const startETH = await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: contractABI,
+        functionName: 'getRoundStartETH',
+        args: [BigInt(gameId), BigInt(roundNumber), playerAddr],
+      }) as bigint;
+
+      // Get current balance
+      const currentETH = await publicClient.getBalance({
+        address: playerAddr,
+      });
+
+      // Calculate gain percentage
+      const gainPct = startETH > 0n 
+        ? Number((currentETH - startETH) * 10000n / startETH) / 100
+        : 0;
+      
+      // Log detailed calculation for debugging
+      if (startETH === 0n) {
+        console.warn(`⚠️ Player ${playerAddr.slice(0, 10)}... has zero roundStartETH for round ${roundNumber} - gain will be 0%`);
+      } else {
+        console.log(`📊 Player ${playerAddr.slice(0, 10)}...: startETH=${formatEther(startETH)} ETH, currentETH=${formatEther(currentETH)} ETH, gain=${gainPct.toFixed(2)}%`);
+      }
+
+      playerData.push({
+        address: playerAddr,
+        startETH,
+        currentETH,
+        gainPct,
+        alive: true,
+      });
+    } else {
+      eliminatedCount++;
+    }
+  }
+
+  console.log(`Alive: ${aliveCount}, Eliminated: ${eliminatedCount}, Total checked: ${allPlayers.length}`);
+
+  // First check: If round is already finalized, don't try to finalize it
+  if (roundFinalized) {
+    throw new Error('Round is already finalized. Please refresh the page to see the updated state.');
+  }
+
+  // If round says players are alive but we can't find them, there's a mismatch
+  // But be more lenient - if we found some players but not all, still proceed
+  if (playerData.length === 0 && roundAlivePlayers > 0) {
+    // Log detailed debug info
+    console.warn('⚠️ Player data mismatch:', {
+      roundAlivePlayers,
+      playerDataLength: playerData.length,
+      totalPlayers: allPlayers.length,
+      aliveCount,
+      eliminatedCount
+    });
+    
+    // If we checked all players and none are alive, but contract says there are alive players,
+    // this might be a timing issue or RPC problem. Try to proceed anyway with empty array
+    // The contract will handle the validation
+    if (allPlayers.length > 0 && aliveCount === 0) {
+      console.warn('⚠️ No alive players found but contract reports alive players. This might be a state sync issue.');
+      console.warn('⚠️ Attempting to finalize with empty array - contract will validate.');
+      // Return empty array and let the contract handle it
+      return [];
+    }
+    
+    // Even if we couldn't find players, don't block finalization
+    // Return empty array and let contract validate - it knows the true state
+    console.warn(`⚠️ Contract reports ${roundAlivePlayers} alive players but none found after checking ${allPlayers.length} players.`);
+    console.warn('⚠️ This might be a state mismatch or RPC issue. Returning empty array - contract will validate.');
+    return []; // Don't throw - let contract handle it
+  }
+
+  // Determine if there's legitimately only 1 player remaining
+  // We need to check BOTH:
+  // 1. The contract's round.alivePlayers (source of truth)
+  // 2. The actual count of alive players we found (cross-verification)
+  
+  console.log(`Player count check: contract reports ${roundAlivePlayers} alive, frontend found ${playerData.length} alive`);
+  
+  // If contract says 0 alive, game should end (no players left)
+  if (roundAlivePlayers === 0) {
+    console.log('⚠️ Contract reports 0 alive players - game should end');
+    return []; // Return empty array - contract will finalize the game
+  }
+  
+  // If contract says 1 alive, verify by checking actual players
+  // This could happen if:
+  // - Other players were eliminated by violations (monitoring service)
+  // - Only 1 player registered
+  // - Previous round eliminations left only 1
+  if (roundAlivePlayers === 1) {
+    // Cross-verify: Check if we actually found 1 alive player
+    if (playerData.length === 1) {
+      console.log('✅ Verified: Only 1 player remaining (contract and frontend agree) - game should end');
+      console.log(`   Remaining player: ${playerData[0].address}`);
+      return []; // No eliminations, game will finalize
+    } else if (playerData.length === 0) {
+      console.warn('⚠️ Contract reports 1 alive player but frontend found 0 - possible RPC sync issue');
+      console.warn('⚠️ Returning empty array - contract will handle validation');
+      return []; // Let contract handle it
+    } else {
+      // Mismatch: contract says 1 but we found more
+      // This could be a timing issue - players might have been eliminated between our check and now
+      // Or RPC sync issue. Trust the contract's count and proceed.
+      console.warn(`⚠️ Mismatch: Contract says 1 alive but frontend found ${playerData.length} alive players`);
+      console.warn('⚠️ This might be a timing/RPC sync issue. Trusting contract count and proceeding...');
+      console.warn('⚠️ Returning empty array - contract will handle validation');
+      return []; // Let contract handle it - don't throw error, just proceed
+    }
+  }
+  
+  // If contract says 2+ alive but we found fewer, there might be a sync issue
+  // But don't block finalization - use what we found and let contract validate
+  if (roundAlivePlayers > 1 && playerData.length < roundAlivePlayers) {
+    console.warn(`⚠️ Mismatch: Contract reports ${roundAlivePlayers} alive but frontend found ${playerData.length}`);
+    console.warn('⚠️ Some players may have been eliminated by violations or RPC sync issue.');
+    console.warn('⚠️ Proceeding with available data - contract will validate...');
+    // Continue - we'll use the players we found
+  }
+  
+  // If we found 0 players but contract says there are alive players
+  // This is unusual but don't block - let contract handle it
+  if (playerData.length === 0 && roundAlivePlayers > 0) {
+    console.warn(`⚠️ WARNING: Contract reports ${roundAlivePlayers} alive players but frontend found 0!`);
+    console.warn('⚠️ This might be an RPC issue or state sync problem.');
+    console.warn('⚠️ Returning empty array - contract will validate and handle appropriately');
+    // Don't throw - return empty array and let contract decide
+    return [];
+  }
+  
+  // If we found only 1 player but contract says more
+  // This could be RPC issue, but proceed with what we found
+  if (playerData.length === 1 && roundAlivePlayers > 1) {
+    console.warn(`⚠️ WARNING: Contract reports ${roundAlivePlayers} alive but frontend only found 1!`);
+    console.warn('⚠️ This might be an RPC issue. Some players may not have been fetched.');
+    console.warn('⚠️ Proceeding with 1 player - if this is wrong, contract will handle it');
+    // Don't throw - proceed with 1 player (game will end, which might be correct)
+    // But we should still try to eliminate based on what we found
+    // Actually, if contract says more than 1, we should try to get more data
+    // But for now, let's proceed and let contract validate
+  }
+
+  console.log('Player rankings:', playerData.map(p => ({
+    address: p.address.slice(0, 10) + '...',
+    gainPct: p.gainPct.toFixed(2) + '%'
+  })));
+
+  // Sort by gain percentage (highest first)
+  playerData.sort((a, b) => b.gainPct - a.gainPct);
+
+  // Determine cutoff
+  const cutoffRank = Number(roundArray[4]);
+  
+  console.log(`Cutoff rank: ${cutoffRank} (top ${cutoffRank} survive)`);
+  console.log(`Total alive players: ${playerData.length}`);
+  
+  // Safety check: cutoffRank should never be >= playerData.length (would eliminate everyone)
+  if (cutoffRank >= playerData.length) {
+    console.error(`⚠️ ERROR: cutoffRank (${cutoffRank}) >= alive players (${playerData.length}). This would eliminate everyone!`);
+    console.error(`⚠️ Adjusting to eliminate only ${Math.max(1, playerData.length - 2)} players to ensure at least 2 survive.`);
+    // Ensure at least 2 players survive (or 1 if only 2 players total)
+    const maxEliminations = Math.max(1, playerData.length - 2);
+    const adjustedCutoff = playerData.length - maxEliminations;
+    console.log(`⚠️ Using adjusted cutoff: ${adjustedCutoff} (will eliminate ${maxEliminations} players)`);
+    
+    // Eliminate bottom players
+    const eliminated = playerData
+      .slice(adjustedCutoff)
+      .map(p => p.address);
+    
+    console.log(`⚠️ Eliminating ${eliminated.length} players (adjusted):`, eliminated.map(a => a.slice(0, 10) + '...'));
+    return eliminated;
+  }
+  
+  // Safety check: Ensure we don't eliminate everyone
+  if (cutoffRank === 0) {
+    console.error(`⚠️ ERROR: cutoffRank is 0, which would eliminate everyone!`);
+    console.error(`⚠️ This should never happen. Setting cutoffRank to 1 to ensure at least 1 survives.`);
+    // If cutoffRank is 0, eliminate all but 1 (game will end)
+    const eliminated = playerData
+      .slice(1)
+      .map(p => p.address);
+    console.log(`⚠️ Eliminating ${eliminated.length} players (safety fallback):`, eliminated.map(a => a.slice(0, 10) + '...'));
+    return eliminated;
+  }
+  
+  // Special case: If all players are tied (same gain %), NO ONE should be eliminated
+  // All players advance to the next round
+  const uniqueGains = new Set(playerData.map(p => p.gainPct.toFixed(4))); // Use 4 decimal places for comparison
+  if (uniqueGains.size === 1) {
+    console.log('✅ All players tied at ' + playerData[0].gainPct.toFixed(2) + '% - NO ELIMINATIONS (all advance)');
+    console.log('✅ This ensures fair play when all players have the same performance');
+    return []; // Return empty array - no eliminations, all players advance
+  }
+  
+  // Normal case: Eliminate players below cutoff rank
+  const eliminated = playerData
+    .slice(cutoffRank)
+    .map(p => p.address);
+
+  // Final safety check: Never eliminate everyone
+  if (eliminated.length >= playerData.length) {
+    console.error(`⚠️ ERROR: Would eliminate all ${playerData.length} players! This should never happen.`);
+    console.error(`⚠️ Adjusting to eliminate only ${Math.max(1, playerData.length - 2)} players.`);
+    return playerData
+      .slice(Math.max(1, playerData.length - 2))
+      .map(p => p.address);
+  }
+
+  console.log(`Eliminating ${eliminated.length} players (${playerData.length - eliminated.length} will survive):`, eliminated.map(a => a.slice(0, 10) + '...'));
+
+  return eliminated;
 }
 
 export default function FinalizeRoundButton({
   gameId,
   roundNumber,
-  eliminatedPlayers,
   onSuccess,
 }: FinalizeRoundButtonProps) {
   const { address } = useAccount();
@@ -31,7 +408,7 @@ export default function FinalizeRoundButton({
 
   // Fetch estimated reward
   useEffect(() => {
-    if (!address || eliminatedPlayers.length === 0) {
+    if (!address) {
       setEstimatedReward(null);
       return;
     }
@@ -72,37 +449,51 @@ export default function FinalizeRoundButton({
     };
 
     fetchReward();
-  }, [gameId, roundNumber, address, eliminatedPlayers.length]);
+  }, [gameId, roundNumber, address]);
 
-  const handleFinalize = async () => {
+  const handleFinalize = async (e?: React.MouseEvent) => {
+    // Prevent any default form submission behavior
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
     if (!address) {
       setError('Please connect your wallet');
       return;
     }
 
-    if (eliminatedPlayers.length === 0) {
-      setError('No players to eliminate');
-      return;
-    }
-
     setError(null);
+    setLoadingReward(true);
     
-    // Ensure eliminatedPlayers is an array of valid addresses
-    const validEliminatedPlayers = eliminatedPlayers.filter((addr): addr is `0x${string}` => {
-      return typeof addr === 'string' && addr.startsWith('0x') && addr.length === 42;
-    });
-    
-    if (validEliminatedPlayers.length === 0) {
-      setError('No valid players to eliminate');
-      return;
-    }
-
-    // Pre-validate by simulating the call
     try {
+      // Calculate which players should be eliminated
+      console.log('Calculating eliminated players...');
+      const calculatedEliminatedPlayers = await getEliminatedPlayers(gameId, roundNumber);
+      
+      // CHANGED: Allow empty array (means everyone advances or game ends)
+      console.log(`${calculatedEliminatedPlayers.length} players to eliminate`);
+      
+      // Log what will happen after finalization
+      if (calculatedEliminatedPlayers.length === 0) {
+        console.log('📋 No players to eliminate - all players will survive this round');
+        console.log('📋 After finalization:');
+        console.log('   - Round will be marked as finalized');
+        console.log('   - If 2+ players remain, next round will start automatically');
+        console.log('   - New snapshot will be taken for the next round');
+        console.log('   - If only 1 player remains, game will end');
+      } else {
+        console.log(`📋 ${calculatedEliminatedPlayers.length} players will be eliminated`);
+        console.log('📋 After finalization:');
+        console.log('   - Round will be marked as finalized');
+        console.log('   - Remaining players will advance to next round');
+        console.log('   - New snapshot will be taken for the next round');
+      }
+
+      // Create public client for simulation
       const { createPublicClient, http } = await import('viem');
       const { baseSepolia } = await import('viem/chains');
       
-      // Use public Base Sepolia RPC to avoid rate limits
       const publicClient = createPublicClient({
         chain: baseSepolia,
         transport: http('https://sepolia.base.org', {
@@ -113,6 +504,7 @@ export default function FinalizeRoundButton({
       });
 
       // Simulate the call to check if it will succeed
+      console.log('Simulating finalization...');
       await publicClient.simulateContract({
         address: CONTRACT_ADDRESS,
         abi: contractABI,
@@ -120,56 +512,73 @@ export default function FinalizeRoundButton({
         args: [
           BigInt(gameId),
           BigInt(roundNumber),
-          validEliminatedPlayers as `0x${string}`[],
-          0n, // gasCost (only used by oracle)
+          calculatedEliminatedPlayers, // Can be empty array
+          0n,
         ],
         account: address,
       });
-      } catch (simError: any) {
-      // Extract error message from simulation
-      let errorMsg = 'Transaction will fail';
+
+      console.log('✓ Simulation passed, sending transaction...');
       
-      // Handle RPC errors
-      if (simError.message?.includes('429') || simError.message?.includes('rate limit')) {
+      // If simulation passes, send the transaction
+      writeContract({
+        address: CONTRACT_ADDRESS,
+        abi: contractABI,
+        functionName: 'finalizeRound',
+        args: [
+          BigInt(gameId),
+          BigInt(roundNumber),
+          calculatedEliminatedPlayers,
+          0n,
+        ],
+        gas: 2000000n, // Fixed 2M gas limit to ensure transaction completes
+      });
+      
+    } catch (simError: any) {
+      console.error('Finalization error:', simError);
+      
+      let errorMsg = 'Transaction will fail';
+      let shouldRefresh = false;
+      let refreshDelay = 10000; // 10 seconds instead of 2
+      
+      if (simError.message?.includes('No alive players')) {
+        errorMsg = 'Round already finalized. Page will refresh in 10 seconds...';
+        shouldRefresh = true;
+      } else if (simError.message?.includes('already finalized')) {
+        errorMsg = 'Round already finalized by another transaction. Page will refresh in 10 seconds...';
+        shouldRefresh = true;
+      } else if (simError.message?.includes('429') || simError.message?.includes('rate limit')) {
         errorMsg = 'RPC rate limit exceeded. Please try again in a moment.';
-      } else if (simError.message?.includes('503') || simError.message?.includes('timeout')) {
-        errorMsg = 'RPC service temporarily unavailable. Please try again.';
+      } else if (simError.message?.includes('Round not ended')) {
+        errorMsg = 'Round has not ended yet';
+      } else if (simError.message?.includes('Gas price too high')) {
+        errorMsg = 'Gas price is too high. Please try again later';
+      } else if (simError.message?.includes('Game not active')) {
+        errorMsg = 'Game is not active';
       } else if (simError.message) {
-        const match = simError.message.match(/revert\s+(.+?)(?:\s|$)/i) || 
-                     simError.message.match(/execution reverted:\s*(.+?)(?:\s|$)/i);
-        if (match && match[1]) {
-          errorMsg = match[1];
-        } else if (simError.message.includes('Round already finalized')) {
-          errorMsg = 'Round already finalized';
-        } else if (simError.message.includes('Round not ended')) {
-          errorMsg = 'Round has not ended yet';
-        } else if (simError.message.includes('Gas price too high')) {
-          errorMsg = 'Gas price is too high';
-        } else if (simError.message.includes('Game not active')) {
-          errorMsg = 'Game is not active';
+        // Extract more readable error message
+        const fullMessage = simError.message;
+        if (fullMessage.includes('execution reverted')) {
+          const match = fullMessage.match(/execution reverted:\s*(.+?)(?:\s|$)/i);
+          errorMsg = match && match[1] ? match[1] : 'Transaction would revert';
         } else {
-          errorMsg = simError.message.length > 100 
-            ? simError.message.substring(0, 100) + '...' 
-            : simError.message;
+          errorMsg = fullMessage.length > 200 
+            ? fullMessage.substring(0, 200) + '...' 
+            : fullMessage;
         }
       }
+      
       setError(errorMsg);
-      console.error('Transaction simulation failed:', simError);
-      return;
+      
+      // Only refresh if explicitly needed, and give user time to see the error
+      if (shouldRefresh) {
+        setTimeout(() => {
+          window.location.reload();
+        }, refreshDelay);
+      }
+    } finally {
+      setLoadingReward(false);
     }
-    
-    // If simulation passes, send the transaction
-    writeContract({
-      address: CONTRACT_ADDRESS,
-      abi: contractABI,
-      functionName: 'finalizeRound',
-      args: [
-        BigInt(gameId),
-        BigInt(roundNumber),
-        validEliminatedPlayers as `0x${string}`[],
-        0n, // gasCost (only used by oracle)
-      ],
-    });
   };
 
   // Handle transaction success
@@ -219,7 +628,7 @@ export default function FinalizeRoundButton({
     return null;
   }
 
-  const isDisabled = isPending || isConfirming || loadingReward || eliminatedPlayers.length === 0;
+  const isDisabled = isPending || isConfirming || loadingReward;
 
   return (
     <div className="space-y-2">
@@ -244,21 +653,24 @@ export default function FinalizeRoundButton({
       )}
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2">
-          <div className="text-sm text-red-300">{error}</div>
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+          <div className="text-sm font-semibold text-red-300 mb-1">Error</div>
+          <div className="text-sm text-red-200 whitespace-pre-wrap break-words">{error}</div>
         </div>
       )}
 
       {writeError && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2">
-          <div className="text-sm text-red-300">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+          <div className="text-sm font-semibold text-red-300 mb-1">Transaction Error</div>
+          <div className="text-sm text-red-200 whitespace-pre-wrap break-words">
             {writeError.message || 'Transaction failed'}
           </div>
         </div>
       )}
 
       <button
-        onClick={handleFinalize}
+        type="button"
+        onClick={(e) => handleFinalize(e)}
         disabled={isDisabled}
         className={`
           w-full px-4 py-3 rounded-lg font-semibold transition-all

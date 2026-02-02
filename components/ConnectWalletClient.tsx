@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useAccount, useDisconnect, useConnect } from 'wagmi';
-import { injected, coinbaseWallet } from 'wagmi/connectors';
+import { injected } from 'wagmi/connectors';
 
 export default function ConnectWalletClient() {
   const { isConnected, address } = useAccount();

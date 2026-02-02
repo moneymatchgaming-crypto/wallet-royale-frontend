@@ -59,7 +59,8 @@ export default function StartGameButton({
     });
   };
 
-  if (timeRemaining <= 0) return null;
+  // Show button even if reward expired - someone still needs to start the game
+  // Just update the message to indicate no reward
 
   const rewardEth = formatEther(reward);
   const needsPayment = userStatus === 'not_registered' && entryFee;
@@ -76,13 +77,24 @@ export default function StartGameButton({
           ? 'Starting Game...'
           : isSuccess
           ? 'Game Started!'
+          : timeRemaining <= 0
+          ? needsPayment
+            ? `Start Game (Pay ${entryFeeEth} ETH)`
+            : 'Start Game'
           : needsPayment
           ? `Start Game (Pay ${entryFeeEth} ETH) & Earn ${rewardEth} ETH`
           : `Start Game & Earn ${rewardEth} ETH`}
       </button>
-      <p className="text-xs text-center text-yellow-400">
-        Reward expires in {countdown}
-      </p>
+      {timeRemaining > 0 && (
+        <p className="text-xs text-center text-yellow-400">
+          Reward expires in {countdown}
+        </p>
+      )}
+      {timeRemaining <= 0 && reward > 0n && (
+        <p className="text-xs text-center text-gray-400">
+          Reward expired, but you can still start the game
+        </p>
+      )}
       {hash && (
         <p className="text-xs text-gray-400 text-center">
           {hash.slice(0, 10)}...{hash.slice(-8)}

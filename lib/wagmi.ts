@@ -1,12 +1,13 @@
 import { createConfig, http } from 'wagmi';
 import { baseSepolia } from 'viem/chains';
-import { injected, coinbaseWallet } from 'wagmi/connectors';
+import { injected } from 'wagmi/connectors';
 
 export const config = createConfig({
   chains: [baseSepolia],
   connectors: [
     injected(),
-    coinbaseWallet({ appName: 'Wallet Royale' }),
+    // Temporarily removed coinbaseWallet due to getChainId error
+    // Can be re-added once connector compatibility is resolved
   ],
   transports: {
     [baseSepolia.id]: http(

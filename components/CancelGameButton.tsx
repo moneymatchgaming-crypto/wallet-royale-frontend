@@ -44,8 +44,9 @@ export default function CancelGameButton({
     (gameStatus === 'REGISTRATION_OPEN' && playerCount < minPlayers);
 
   // Fetch cancel reward only if potentially cancellable
+  // Note: We check eligibility even without a connected wallet to show the button
   useEffect(() => {
-    if (!address || !mightBeCancellable) {
+    if (!mightBeCancellable) {
       setCancelReward(null);
       setCanCancel(false);
       return;
@@ -56,6 +57,8 @@ export default function CancelGameButton({
       const now = Math.floor(Date.now() / 1000);
       const GRACE_PERIOD = 3600; // 1 hour
       if (now < registrationDeadline + GRACE_PERIOD) {
+        setCanCancel(false);
+        setLoadingReward(false);
         return;
       }
 
@@ -89,10 +92,9 @@ export default function CancelGameButton({
 
     fetchCancelInfo();
     
-    // OPTIMIZATION: Only poll if close to being cancellable
-    // Stop polling once we know it's cancellable or definitely not cancellable
-    if (!canCancel && mightBeCancellable) {
-      intervalRef.current = setInterval(fetchCancelInfo, 60000); // 60s instead of 30s
+    // Poll if close to being cancellable or if we're still checking
+    if (mightBeCancellable) {
+      intervalRef.current = setInterval(fetchCancelInfo, 60000); // Check every 60s
     }
     
     return () => {
@@ -100,7 +102,7 @@ export default function CancelGameButton({
         clearInterval(intervalRef.current);
       }
     };
-  }, [gameId, address, mightBeCancellable, registrationDeadline, canCancel, playerCount, minPlayers]);
+  }, [gameId, mightBeCancellable, registrationDeadline, playerCount, minPlayers]);
 
   const handleCancel = () => {
     if (!address) {
@@ -177,9 +179,33 @@ export default function CancelGameButton({
 
   const isProcessing = isPending || isConfirming || loadingReward;
 
-  // OPTIMIZATION: Hide button immediately if conditions aren't met
-  if (!mightBeCancellable || (!canCancel && !loadingReward)) {
+  // Show button if game might be cancellable (even if we're still checking)
+  // Hide only if we've confirmed it can't be cancelled
+  if (!mightBeCancellable) {
     return null;
+  }
+
+  // Check if grace period has passed
+  const now = Math.floor(Date.now() / 1000);
+  const GRACE_PERIOD = 3600; // 1 hour
+  const gracePeriodPassed = now >= registrationDeadline + GRACE_PERIOD;
+  
+  // If grace period hasn't passed, show countdown
+  if (!gracePeriodPassed) {
+    const timeRemaining = (registrationDeadline + GRACE_PERIOD) - now;
+    const hours = Math.floor(timeRemaining / 3600);
+    const minutes = Math.floor((timeRemaining % 3600) / 60);
+    return (
+      <div className="flex flex-col items-center p-4 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl shadow-lg">
+        <h3 className="text-lg font-bold text-white mb-2">Cancel Game</h3>
+        <p className="text-sm text-gray-400 text-center">
+          Can be cancelled in {hours}h {minutes}m
+        </p>
+        <p className="text-xs text-gray-500 text-center mt-1">
+          (After grace period ends)
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -195,13 +221,23 @@ export default function CancelGameButton({
         <p className="text-sm text-gray-400 mb-4">No reward available</p>
       )}
 
-      <button
-        onClick={handleCancel}
-        className="w-full px-6 py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        disabled={isProcessing || !canCancel}
-      >
-        {isPending ? 'Confirming...' : isConfirming ? 'Cancelling...' : 'Cancel Game'}
-      </button>
+      {!address ? (
+        <p className="text-sm text-yellow-400 text-center">
+          Connect wallet to cancel game
+        </p>
+      ) : !canCancel && !loadingReward ? (
+        <p className="text-sm text-gray-400 text-center">
+          Game cannot be cancelled at this time
+        </p>
+      ) : (
+        <button
+          onClick={handleCancel}
+          className="w-full px-6 py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={isProcessing || !canCancel}
+        >
+          {isPending ? 'Confirming...' : isConfirming ? 'Cancelling...' : 'Cancel Game'}
+        </button>
+      )}
 
       {error && (
         <p className="text-red-500 text-xs mt-3 text-center">{error}</p>

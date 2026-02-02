@@ -147,6 +147,8 @@ export default function GamePage() {
   const [finalizationTxHash, setFinalizationTxHash] = useState<string | null>(null);
   const [eliminatedPlayers, setEliminatedPlayers] = useState<string[]>([]);
   const [registrationCountdown, setRegistrationCountdown] = useState<string>('');
+  const [loadingWinnerData, setLoadingWinnerData] = useState<boolean>(false);
+  const [winnerDataError, setWinnerDataError] = useState<string | null>(null);
 
   // Extract active players and round timing from round data
   // rounds() returns: [roundNumber, startTime, endTime, alivePlayers, cutoffRank, finalized]
@@ -203,7 +205,10 @@ export default function GamePage() {
         
         // Get player's starting value (index 1 = startValueUSDC)
         const startValueUSDC = (playerData as any)[1] as bigint;
-        if (startValueUSDC === 0n) return null;
+        if (startValueUSDC === 0n) {
+          console.warn(`⚠️ Player ${playerAddress} has zero startValueUSDC`);
+          return null;
+        }
         
         // Get player's current adjusted balances
         const adjustedBalances = await publicClient.readContract({
@@ -233,9 +238,10 @@ export default function GamePage() {
         // Calculate percentage gain
         const gain = totalValueUSDC - startValueUSDC;
         const gainPercent = (Number(gain) / Number(startValueUSDC)) * 100;
+        console.log(`📊 Player ${playerAddress.slice(0, 10)}... gain: ${gainPercent.toFixed(2)}%`);
         return gainPercent;
       } catch (error) {
-        console.error(`Error calculating gain for ${playerAddress}:`, error);
+        console.error(`❌ Error calculating gain for ${playerAddress}:`, error);
         return null;
       }
     };
@@ -249,118 +255,134 @@ export default function GamePage() {
       });
       
       if (!game || !game.finalized || game.cancelled || !gamePlayers) {
-        console.log('❌ Skipping - game not finalized or missing data');
+        console.log('❌ Skipping - game not finalized or missing data', {
+          hasGame: !!game,
+          finalized: game?.finalized,
+          cancelled: game?.cancelled,
+          hasPlayers: !!gamePlayers
+        });
+        setLoadingWinnerData(false);
+        setWinnerDataError('Game not finalized or missing player data');
         return;
       }
       
-      // For known games, use their transaction hashes as fallback
-      const knownTransactions: Record<number, string> = {
-        1: '0xa8a58bec9356bab0ca6fdb209e4bebf09c04ce6e040da77a5153dd64cf8827ad',
-        2: '0x98d8f9240fd3288cd901a8122e3cead03d07e19fd551bba26055e4115e7da43d',
-      };
+      setLoadingWinnerData(true);
+      setWinnerDataError(null);
       
-      if (knownTransactions[gameId]) {
-        console.log(`🎯 Setting known transaction hash for game #${gameId}`);
-        setFinalizationTxHash(knownTransactions[gameId]);
-      }
-      
-      // Calculate prize pool: 70% of total entry fees
-      // prizePool = entryFee * playerCount * 0.7
-      const totalEntryFees = game.entryFee * game.playerCount;
-      const calculatedPrizePool = (totalEntryFees * 70n) / 100n;
-      setPrizeAmount(calculatedPrizePool);
-
-      // Find the winner (alive player) and all losers (eliminated players)
-      const players = gamePlayers as Address[];
-      const losersList: Array<{ address: Address; gainPercent: number }> = [];
-      let winnerAddress: Address | null = null;
-      let winnerGain: number | null = null;
-
-      for (const player of players) {
-        try {
-          const playerData = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: contractABI,
-            functionName: 'getPlayer',
-            args: [BigInt(gameId), player],
-          });
-          
-          // Check if player is alive (index 6)
-          const isAlive = (playerData as any)[6] === true;
-          
-          // Calculate gain percentage for this player
-          const gainPercent = await calculateGainPercent(player);
-          
-          if (isAlive && gainPercent !== null) {
-            // This is the winner
-            winnerAddress = player;
-            winnerGain = gainPercent;
-          } else if (!isAlive && gainPercent !== null) {
-            // This is a loser (eliminated player)
-            losersList.push({ address: player, gainPercent });
-          }
-        } catch (error) {
-          console.error(`Error checking player ${player}:`, error);
+      try {
+        // For known games, use their transaction hashes as fallback
+        const knownTransactions: Record<number, string> = {
+          1: '0xa8a58bec9356bab0ca6fdb209e4bebf09c04ce6e040da77a5153dd64cf8827ad',
+          2: '0x98d8f9240fd3288cd901a8122e3cead03d07e19fd551bba26055e4115e7da43d',
+        };
+        
+        if (knownTransactions[gameId]) {
+          console.log(`🎯 Setting known transaction hash for game #${gameId}`);
+          setFinalizationTxHash(knownTransactions[gameId]);
         }
-      }
+        
+        // Calculate prize pool: 70% of total entry fees
+        // prizePool = entryFee * playerCount * 0.7
+        const totalEntryFees = game.entryFee * game.playerCount;
+        const calculatedPrizePool = (totalEntryFees * 70n) / 100n;
+        setPrizeAmount(calculatedPrizePool);
 
-      // Sort losers by gain percentage (worst first)
-      losersList.sort((a, b) => a.gainPercent - b.gainPercent);
+        // Find the winner (alive player) and all losers (eliminated players)
+        const players = gamePlayers as Address[];
+        console.log(`👥 Processing ${players.length} players for game #${gameId}`);
+        
+        if (players.length === 0) {
+          console.warn('⚠️ No players found in game');
+          setWinnerDataError('No players found in this game');
+          setLoadingWinnerData(false);
+          return;
+        }
+        
+        const losersList: Array<{ address: Address; gainPercent: number }> = [];
+        let winnerAddress: Address | null = null;
+        let winnerGain: number | null = null;
 
-      setWinner(winnerAddress);
-      setWinnerGainPercent(winnerGain);
-      setLosers(losersList);
-      
-      // Use Basescan API to find the internal transaction that paid the winner
-      // This is the original approach - querying internal transactions from contract to winner
-      if (winnerAddress) {
-        try {
-          console.log('📡 Querying Basescan API for internal transactions to winner:', winnerAddress);
-          const basescanUrl = `https://api-sepolia.basescan.org/api?module=account&action=txlistinternal&address=${CONTRACT_ADDRESS}&startblock=0&endblock=99999999&sort=desc&apikey=YourApiKeyToken`;
-          
-          console.log('   URL:', basescanUrl);
-          const response = await fetch(basescanUrl);
-          const data = await response.json();
-          
-          console.log('📥 Basescan API response:', { 
-            status: data.status, 
-            message: data.message, 
-            resultCount: data.result?.length || 0 
-          });
-          
-          if (data.status === '1' && data.result && Array.isArray(data.result)) {
-            // Find the transaction that sent ETH to the winner
-            // The prize payout is an internal transaction from the contract to the winner
-            const payoutTx = data.result.find((tx: any) => 
-              tx.to && tx.to.toLowerCase() === winnerAddress!.toLowerCase() &&
-              parseFloat(tx.value) > 0 &&
-              tx.from && tx.from.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
-            );
+        for (const player of players) {
+          try {
+            const playerData = await publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              functionName: 'getPlayer',
+              args: [BigInt(gameId), player],
+            });
             
-            if (payoutTx) {
-              setFinalizationTxHash(payoutTx.hash);
-              console.log('✅ Found prize payout transaction:', payoutTx.hash);
-              console.log('   Transaction URL: https://sepolia.basescan.org/tx/' + payoutTx.hash);
-              console.log('   Amount sent:', payoutTx.value, 'wei');
+            // Check if player is alive (index 6)
+            const isAlive = (playerData as any)[6] === true;
+            console.log(`  Player ${player.slice(0, 10)}... - Alive: ${isAlive}`);
+            
+            // Calculate gain percentage for this player (even if null, we'll still show the address)
+            const gainPercent = await calculateGainPercent(player);
+            
+            if (isAlive) {
+              // This is the winner
+              winnerAddress = player;
+              winnerGain = gainPercent;
+              console.log(`🏆 Winner found: ${player}, gain: ${winnerGain !== null ? winnerGain.toFixed(2) + '%' : 'N/A'}`);
             } else {
-              console.warn('⚠️ No matching payout transaction found. Total results:', data.result.length);
-              if (data.result.length > 0) {
-                console.log('   Sample transactions:', data.result.slice(0, 3).map((tx: any) => ({
-                  from: tx.from,
-                  to: tx.to,
-                  value: tx.value,
-                  hash: tx.hash
-                })));
+              // This is a loser (eliminated player) - add even if gainPercent is null
+              losersList.push({ 
+                address: player, 
+                gainPercent: gainPercent !== null ? gainPercent : 0 
+              });
+            }
+          } catch (error) {
+            console.error(`❌ Error checking player ${player}:`, error);
+            // Still add to losers list even if we can't get full data
+            losersList.push({ address: player, gainPercent: 0 });
+          }
+        }
+
+        // Sort losers by gain percentage (worst first)
+        losersList.sort((a, b) => a.gainPercent - b.gainPercent);
+
+        console.log(`✅ Setting winner: ${winnerAddress}, losers: ${losersList.length}`);
+        setWinner(winnerAddress);
+        setWinnerGainPercent(winnerGain);
+        setLosers(losersList);
+        
+        // Use Basescan API to find the internal transaction that paid the winner
+        if (winnerAddress) {
+          try {
+            console.log('📡 Querying Basescan API for internal transactions to winner:', winnerAddress);
+            const basescanUrl = `https://api-sepolia.basescan.org/api?module=account&action=txlistinternal&address=${CONTRACT_ADDRESS}&startblock=0&endblock=99999999&sort=desc&apikey=YourApiKeyToken`;
+            
+            const response = await fetch(basescanUrl);
+            const data = await response.json();
+            
+            console.log('📥 Basescan API response:', { 
+              status: data.status, 
+              message: data.message, 
+              resultCount: data.result?.length || 0 
+            });
+            
+            if (data.status === '1' && data.result && Array.isArray(data.result)) {
+              const payoutTx = data.result.find((tx: any) => 
+                tx.to && tx.to.toLowerCase() === winnerAddress!.toLowerCase() &&
+                parseFloat(tx.value) > 0 &&
+                tx.from && tx.from.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
+              );
+              
+              if (payoutTx) {
+                setFinalizationTxHash(payoutTx.hash);
+                console.log('✅ Found prize payout transaction:', payoutTx.hash);
+              } else {
+                console.warn('⚠️ No matching payout transaction found');
               }
             }
-          } else {
-            console.warn('⚠️ Basescan API returned:', data.status, data.message);
+          } catch (apiError) {
+            console.error('❌ Basescan API query failed:', apiError);
           }
-        } catch (apiError) {
-          console.error('❌ Basescan API query failed:', apiError);
         }
-      } else {
-        console.log('⚠️ No winner address yet, skipping transaction lookup');
+      } catch (error) {
+        console.error('❌ Error in findWinnerAndLosers:', error);
+        setWinnerDataError(error instanceof Error ? error.message : 'Failed to load winner data');
+      } finally {
+        setLoadingWinnerData(false);
       }
     };
 
@@ -661,18 +683,35 @@ export default function GamePage() {
             </h2>
             {!game.cancelled && (
               <>
-                {winner && winnerGainPercent !== null && (
+                {loadingWinnerData && (
+                  <div className="bg-[#1a1a1a] border border-gray-700 p-6 rounded-2xl mb-6">
+                    <div className="text-white">Loading game results...</div>
+                  </div>
+                )}
+                
+                {winnerDataError && !loadingWinnerData && (
+                  <div className="bg-[#1a1a1a] border border-red-500/50 p-6 rounded-2xl mb-6">
+                    <div className="text-red-400">Error: {winnerDataError}</div>
+                  </div>
+                )}
+                
+                {winner && (
                   <div className="bg-[#1a1a1a] border border-purple-500/50 p-6 rounded-2xl mb-6">
                     <div className="text-xs text-[#9ca3af] mb-2">Winner</div>
                     <div className="text-xl font-semibold text-purple-400 font-mono break-all mb-3">
                       {winner}
                     </div>
-                    <div className="flex justify-between items-center pt-3 border-t border-gray-700">
-                      <span className="text-sm text-[#9ca3af]">Final Gain:</span>
-                      <span className={`text-xl font-semibold ${winnerGainPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        {winnerGainPercent >= 0 ? '+' : ''}{winnerGainPercent.toFixed(2)}%
-                      </span>
-                    </div>
+                    {winnerGainPercent !== null && (
+                      <div className="flex justify-between items-center pt-3 border-t border-gray-700">
+                        <span className="text-sm text-[#9ca3af]">Final Gain:</span>
+                        <span className={`text-xl font-semibold ${winnerGainPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {winnerGainPercent >= 0 ? '+' : ''}{winnerGainPercent.toFixed(2)}%
+                        </span>
+                      </div>
+                    )}
+                    {winnerGainPercent === null && (
+                      <div className="text-xs text-yellow-400 mt-3">Gain percentage unavailable</div>
+                    )}
                     {finalizationTxHash ? (
                       <a
                         href={`https://sepolia.basescan.org/tx/${finalizationTxHash}#internaltx`}
@@ -682,7 +721,7 @@ export default function GamePage() {
                       >
                         View Prize Payout Internal Transaction ({formatEther(prizeAmount > 0n ? prizeAmount : game.prizePool || 0n)} ETH sent to {winner.slice(0, 6)}...{winner.slice(-4)}) →
                       </a>
-                    ) : (
+                    ) : winner && (
                       <a
                         href={`https://sepolia.basescan.org/address/${CONTRACT_ADDRESS}#internaltx`}
                         target="_blank"
@@ -695,9 +734,15 @@ export default function GamePage() {
                   </div>
                 )}
                 
+                {!winner && !loadingWinnerData && gamePlayers && (gamePlayers as Address[]).length > 0 && (
+                  <div className="bg-[#1a1a1a] border border-yellow-500/50 p-6 rounded-2xl mb-6">
+                    <div className="text-yellow-400">No winner found. All players may have been eliminated.</div>
+                  </div>
+                )}
+                
                 {losers.length > 0 && (
                   <div className="bg-[#1a1a1a] border border-gray-700 p-6 rounded-2xl mb-6">
-                    <div className="text-xs text-[#9ca3af] mb-4">Eliminated Players</div>
+                    <div className="text-xs text-[#9ca3af] mb-4">Eliminated Players ({losers.length})</div>
                     <div className="space-y-3 max-h-96 overflow-y-auto">
                       {losers.map((loser, index) => (
                         <div key={loser.address} className="flex justify-between items-center py-2 border-b border-gray-800 last:border-b-0">
@@ -715,6 +760,7 @@ export default function GamePage() {
                     </div>
                   </div>
                 )}
+                
                 <div className="bg-[#1a1a1a] border border-[#fbbf24] p-4 inline-block">
                   <div className="text-xs text-[#9ca3af] mb-1">Prize Pool (Paid Out)</div>
                   <div className="text-2xl font-semibold text-[#10b981]">
