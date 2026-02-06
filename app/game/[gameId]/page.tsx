@@ -9,6 +9,7 @@ import { CONTRACT_ADDRESS, contractABI, publicClient } from '@/lib/contract';
 import GameBoard from '@/components/GameBoard';
 import Sidebar from '@/components/Sidebar';
 import { Address } from 'viem';
+import { fetchGamePlayers, PlayerData } from '@/lib/gameHelpers';
 
 interface GameData {
   gameId: bigint;
@@ -149,6 +150,12 @@ export default function GamePage() {
   const [registrationCountdown, setRegistrationCountdown] = useState<string>('');
   const [loadingWinnerData, setLoadingWinnerData] = useState<boolean>(false);
   const [winnerDataError, setWinnerDataError] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<Map<string, Map<number, bigint>>>(new Map());
+  const [roundEndSnapshots, setRoundEndSnapshots] = useState<Map<string, Map<number, bigint>>>(new Map());
+  const [loadingSnapshots, setLoadingSnapshots] = useState<boolean>(false);
+  const [eliminationData, setEliminationData] = useState<Map<string, { round: number; startETH: bigint; endETH: bigint; gainPercent: number }>>(new Map());
+  const [players, setPlayers] = useState<PlayerData[]>([]);
+  const [loadingPlayers, setLoadingPlayers] = useState<boolean>(false);
 
   // Extract active players and round timing from round data
   // rounds() returns: [roundNumber, startTime, endTime, alivePlayers, cutoffRank, finalized]
@@ -196,49 +203,56 @@ export default function GamePage() {
     // Helper function to calculate gain percentage for a player
     const calculateGainPercent = async (playerAddress: Address): Promise<number | null> => {
       try {
+        // Get player data to access startETH
         const playerData = await publicClient.readContract({
           address: CONTRACT_ADDRESS,
           abi: contractABI,
-          functionName: 'getPlayer',
+          functionName: 'players',
           args: [BigInt(gameId), playerAddress],
         });
         
-        // Get player's starting value (index 1 = startValueUSDC)
-        const startValueUSDC = (playerData as any)[1] as bigint;
-        if (startValueUSDC === 0n) {
-          console.warn(`⚠️ Player ${playerAddress} has zero startValueUSDC`);
+        // Player struct: [wallet, squareIndex, startETH, startUSDC, startAERO, startCAKE, 
+        //                 startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE,
+        //                 alive, registered, eliminationReason, registrationTime]
+        // startETH is at index 2
+        const playerArray = Array.isArray(playerData) ? playerData : [
+          playerData.wallet || playerData[0],
+          playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[1],
+          playerData.startETH !== undefined ? playerData.startETH : playerData[2],
+          playerData.startUSDC !== undefined ? playerData.startUSDC : playerData[3],
+          playerData.startAERO !== undefined ? playerData.startAERO : playerData[4],
+          playerData.startCAKE !== undefined ? playerData.startCAKE : playerData[5],
+          playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[6],
+          playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[7],
+          playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[8],
+          playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[9],
+          playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[10],
+          playerData.alive !== undefined ? playerData.alive : playerData[11],
+          playerData.registered !== undefined ? playerData.registered : playerData[12],
+          playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[13],
+          playerData.registrationTime !== undefined ? playerData.registrationTime : playerData[14],
+        ];
+        
+        const startETH = playerArray[2] as bigint;
+        
+        if (startETH === 0n) {
+          console.warn(`⚠️ Player ${playerAddress} has zero startETH`);
           return null;
         }
         
-        // Get player's current adjusted balances
-        const adjustedBalances = await publicClient.readContract({
-          address: CONTRACT_ADDRESS,
-          abi: contractABI,
-          functionName: 'getAdjustedBalances',
-          args: [BigInt(gameId), playerAddress],
+        // Get current ETH balance directly from the wallet
+        const currentETH = await publicClient.getBalance({
+          address: playerAddress,
         });
         
-        // Calculate total current value in USDC
-        // adjustedBalances returns: (ETH, USDC, AERO, CAKE)
-        const [ethBalance, usdcBalance, aeroBalance, cakeBalance] = adjustedBalances as [bigint, bigint, bigint, bigint];
+        // Calculate ETH percentage gain from game start to now
+        // gainPercent = ((currentETH - startETH) / startETH) * 100
+        const gain = currentETH - startETH;
+        const gainPercent = startETH > 0n 
+          ? Number((gain * 10000n) / startETH) / 100
+          : 0;
         
-        // Convert to USDC value (simplified pricing - should match monitoring service)
-        const ETH_PRICE_USDC = 3300; // $3300 per ETH
-        const AERO_PRICE_USDC = 1; // Placeholder
-        const CAKE_PRICE_USDC = 1; // Placeholder
-        
-        // ETH: 18 decimals, USDC: 6 decimals, AERO/CAKE: 18 decimals
-        const ethValueUSDC = (Number(formatEther(ethBalance)) * ETH_PRICE_USDC * 1e6);
-        const usdcValueUSDC = Number(formatUnits(usdcBalance, 6));
-        const aeroValueUSDC = (Number(formatEther(aeroBalance)) * AERO_PRICE_USDC * 1e6);
-        const cakeValueUSDC = (Number(formatEther(cakeBalance)) * CAKE_PRICE_USDC * 1e6);
-        
-        const totalValueUSDC = BigInt(Math.floor(ethValueUSDC + usdcValueUSDC + aeroValueUSDC + cakeValueUSDC));
-        
-        // Calculate percentage gain
-        const gain = totalValueUSDC - startValueUSDC;
-        const gainPercent = (Number(gain) / Number(startValueUSDC)) * 100;
-        console.log(`📊 Player ${playerAddress.slice(0, 10)}... gain: ${gainPercent.toFixed(2)}%`);
+        console.log(`📊 Player ${playerAddress.slice(0, 10)}... ETH gain: ${gainPercent.toFixed(2)}% (start: ${formatEther(startETH)} ETH, current: ${formatEther(currentETH)} ETH)`);
         return gainPercent;
       } catch (error) {
         console.error(`❌ Error calculating gain for ${playerAddress}:`, error);
@@ -438,6 +452,35 @@ export default function GamePage() {
     return () => clearInterval(interval);
   }, [game, registrationDeadline]);
 
+  // Fetch players for the game board
+  useEffect(() => {
+    if (!game || !gameId || gameId === 0) {
+      setPlayers([]);
+      return;
+    }
+
+    const loadPlayers = async () => {
+      setLoadingPlayers(true);
+      try {
+        const fetchedPlayers = await fetchGamePlayers(BigInt(gameId));
+        setPlayers(fetchedPlayers);
+        console.log(`✅ Loaded ${fetchedPlayers.length} players for game ${gameId}`);
+      } catch (error) {
+        console.error('Error fetching players:', error);
+        setPlayers([]);
+      } finally {
+        setLoadingPlayers(false);
+      }
+    };
+
+    // Only fetch if game has at least one player
+    if (game.playerCount > 0n) {
+      loadPlayers();
+    } else {
+      setPlayers([]);
+    }
+  }, [game, gameId, game?.playerCount]);
+
   // Compute values needed for hooks (before conditional return)
   // Use safe defaults when game is undefined
   const now = Math.floor(Date.now() / 1000);
@@ -554,6 +597,204 @@ export default function GamePage() {
     calculateEliminatedPlayers();
   }, [roundShouldHaveEnded, allPlayersForRanking, game, gameId, currentRoundNum, cutoffRank, timeRemaining, isFinished, roundFinalized]);
 
+  // Fetch snapshots for all rounds (only for rounds where player was alive)
+  // Fetch immediately when game starts to show Round 1 Start balances
+  useEffect(() => {
+    if (!game || !hasStarted || isFinished) return;
+
+    const fetchSnapshots = async () => {
+      setLoadingSnapshots(true);
+      try {
+        const snapshotMap = new Map<string, Map<number, bigint>>();
+        const roundEndMap = new Map<string, Map<number, bigint>>();
+        const elimDataMap = new Map<string, { round: number; startETH: bigint; endETH: bigint; gainPercent: number }>();
+        
+        // Get players list - use gamePlayers if available, otherwise fetch it
+        let players: Address[] = [];
+        if (gamePlayers) {
+          players = gamePlayers as Address[];
+        } else {
+          try {
+            players = await publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              functionName: 'getGamePlayers',
+              args: [BigInt(gameId)],
+            }) as Address[];
+          } catch (error) {
+            console.error('Error fetching players for snapshots:', error);
+            setLoadingSnapshots(false);
+            return;
+          }
+        }
+        const totalRounds = Number(game.totalRounds);
+        const currentRound = Number(game.currentRound);
+        const maxRound = Math.max(currentRound, 1);
+
+        // First, check which rounds are finalized (do this once for all players)
+        const finalizedRounds = new Set<number>();
+        console.log(`🔍 Checking finalized rounds (1 to ${maxRound})...`);
+        for (let round = 1; round <= maxRound; round++) {
+          try {
+            const roundData = await publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              functionName: 'rounds',
+              args: [BigInt(gameId), BigInt(round)],
+            }) as any[];
+            const isFinalized = roundData[5] === true; // finalized is at index 5
+            if (isFinalized) {
+              finalizedRounds.add(round);
+              console.log(`  ✓ Round ${round} is finalized`);
+            } else {
+              console.log(`  ⏳ Round ${round} is not finalized yet`);
+            }
+          } catch (error) {
+            console.warn(`Could not check if round ${round} is finalized:`, error);
+          }
+        }
+        console.log(`📋 Finalized rounds: ${Array.from(finalizedRounds).join(', ') || 'none'}`);
+
+        // Fetch snapshots for all rounds up to current round
+        for (const player of players) {
+          const playerSnapshots = new Map<number, bigint>();
+          const playerRoundEnds = new Map<number, bigint>();
+          
+          // Get player data to check alive status
+          // Use getPlayer() instead of players() to avoid bigint overflow issues with registrationTime
+          let playerData: any = null;
+          let isCurrentlyAlive = false;
+          try {
+            playerData = await publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              functionName: 'getPlayer',
+              args: [BigInt(gameId), player],
+            });
+            
+            // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, 
+            //                     penaltyAERO, penaltyCAKE, alive, eliminationReason]
+            // alive is at index 6
+            const playerArray = Array.isArray(playerData) ? playerData : [
+              playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[0],
+              playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[1],
+              playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[2],
+              playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[3],
+              playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[4],
+              playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[5],
+              playerData.alive !== undefined ? playerData.alive : playerData[6],
+              playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[7],
+            ];
+            
+            isCurrentlyAlive = playerArray[6] === true;
+          } catch (error) {
+            console.warn(`Failed to fetch player data for ${player}:`, error);
+            continue;
+          }
+          
+          // Fetch Round End snapshots for all finalized rounds (independent of Start snapshots)
+          // This ensures we capture end balances even if player was eliminated during the round
+          for (const round of finalizedRounds) {
+            try {
+              const endETH = await publicClient.readContract({
+                address: CONTRACT_ADDRESS,
+                abi: contractABI,
+                functionName: 'getRoundEndETH',
+                args: [BigInt(gameId), BigInt(round), player],
+              }) as bigint;
+              
+              // Store it even if 0, because 0 is a valid balance
+              // Note: If player was eliminated DURING the round (violations), they won't have a Round End snapshot
+              // because the contract only snapshots alive players at finalization time
+              // But if they were alive at finalization, they should have a snapshot
+              // We're already in the loop for finalized rounds, so always store if we got here
+              playerRoundEnds.set(round, endETH);
+              console.log(`✓ Round ${round} End ETH for ${player.slice(0, 8)}...: ${formatEther(endETH)} ETH`);
+            } catch (endError) {
+              console.debug(`No Round ${round} End snapshot for ${player.slice(0, 8)}... (player may have been eliminated during round):`, endError);
+            }
+          }
+          
+          // Now fetch Round Start snapshots
+          for (let round = 1; round <= maxRound; round++) {
+            try {
+              // Fetch round start ETH
+              const snapshotETH = await publicClient.readContract({
+                address: CONTRACT_ADDRESS,
+                abi: contractABI,
+                functionName: 'getRoundStartETH',
+                args: [BigInt(gameId), BigInt(round), player],
+              }) as bigint;
+              
+              // Only add snapshot if it exists (player was alive when round started)
+              // If snapshot is 0, it means player was eliminated before this round
+              if (snapshotETH > 0n) {
+                playerSnapshots.set(round, snapshotETH);
+              } else {
+                // If we find a missing snapshot after round 1, player was eliminated
+                // Stop checking further rounds for start snapshots
+                break;
+              }
+            } catch (error) {
+              // If we can't fetch a snapshot, player was likely eliminated before this round
+              console.debug(`No Round ${round} Start snapshot for player ${player} (likely eliminated):`, error);
+              break;
+            }
+          }
+          
+          // Add to maps if we have any snapshots (start or end)
+          // This ensures players with only end snapshots are still displayed
+          if (playerSnapshots.size > 0 || playerRoundEnds.size > 0) {
+            snapshotMap.set(player, playerSnapshots);
+            
+            // Always store round end snapshots map (even if empty)
+            roundEndMap.set(player, playerRoundEnds);
+            
+            console.log(`Player ${player.slice(0, 8)}... - Start snapshots: ${playerSnapshots.size}, End snapshots: ${playerRoundEnds.size}`);
+            
+            // Calculate elimination data for eliminated players
+            if (!isCurrentlyAlive && playerSnapshots.size > 0) {
+              const lastRound = Math.max(...Array.from(playerSnapshots.keys()));
+              const startETH = playerSnapshots.get(lastRound)!;
+              const endETH = playerRoundEnds.get(lastRound) || 0n;
+              
+              if (endETH > 0n) {
+                const gain = endETH - startETH;
+                const gainPercent = startETH > 0n 
+                  ? Number((gain * 10000n) / startETH) / 100
+                  : 0;
+                
+                // Store elimination data showing the comparison that was made
+                elimDataMap.set(player, {
+                  round: lastRound,
+                  startETH,
+                  endETH: endETH,
+                  gainPercent
+                });
+              }
+            }
+          }
+        }
+        
+        console.log(`📊 Snapshot fetch complete:`);
+        console.log(`  - Players with snapshots: ${snapshotMap.size}`);
+        console.log(`  - Players with end snapshots: ${roundEndMap.size}`);
+        console.log(`  - Total rounds checked: ${Math.max(Number(game.currentRound), 1)}`);
+        console.log(`  - Finalized rounds: ${Array.from(finalizedRounds).join(', ') || 'none'}`);
+        
+        setSnapshots(snapshotMap);
+        setRoundEndSnapshots(roundEndMap);
+        setEliminationData(elimDataMap);
+      } catch (error) {
+        console.error('❌ Error fetching snapshots:', error);
+      } finally {
+        setLoadingSnapshots(false);
+      }
+    };
+
+    fetchSnapshots();
+  }, [game, hasStarted, isFinished, gamePlayers, gameId, game?.currentRound]);
+
   // Conditional return - MUST be after all hooks
   if (!game) {
     return (
@@ -577,9 +818,7 @@ export default function GamePage() {
     ? 'eliminated'
     : 'registered';
 
-  // TODO: Fetch actual players from events or backend
-  // For now, using empty array - will be populated via WebSocket or API
-  const players: any[] = [];
+  // Players are now fetched via useEffect above using fetchGamePlayers
 
   const statusLabels: Record<string, string> = {
     'REGISTRATION_OPEN': 'Registration Open',
@@ -651,31 +890,214 @@ export default function GamePage() {
             />
           </div>
         ) : hasStarted && !isFinished ? (
-          <div className="flex gap-6">
-            <div className="flex-1">
-              <GameBoard gameId={gameId} players={players} />
+          <>
+            <div className="flex gap-6">
+              <div className="flex-1">
+                <GameBoard gameId={gameId} players={players} />
+              </div>
+              <Sidebar
+                gameId={gameId}
+                currentRound={Number(game.currentRound)}
+                totalRounds={Number(game.totalRounds)}
+                roundDuration={Number(game.roundDuration)}
+                timeRemaining={timeRemaining}
+                prizePool={game.prizePool}
+                totalPlayers={Number(game.playerCount)}
+                activePlayers={activePlayers}
+                userStatus={userStatus as 'not_registered' | 'registered' | 'eliminated'}
+                entryFee={game.entryFee}
+                canStart={false}
+                startReward={0n}
+                rewardTimeRemaining={0}
+                roundShouldHaveEnded={roundShouldHaveEnded}
+                onRegistrationSuccess={() => {
+                  refetchPlayer();
+                  refetchGame();
+                }}
+              />
             </div>
-            <Sidebar
-              gameId={gameId}
-              currentRound={Number(game.currentRound)}
-              totalRounds={Number(game.totalRounds)}
-              roundDuration={Number(game.roundDuration)}
-              timeRemaining={timeRemaining}
-              prizePool={game.prizePool}
-              totalPlayers={Number(game.playerCount)}
-              activePlayers={activePlayers}
-              userStatus={userStatus as 'not_registered' | 'registered' | 'eliminated'}
-              entryFee={game.entryFee}
-              canStart={false}
-              startReward={0n}
-              rewardTimeRemaining={0}
-              roundShouldHaveEnded={roundShouldHaveEnded}
-              onRegistrationSuccess={() => {
-                refetchPlayer();
-                refetchGame();
-              }}
-            />
-          </div>
+            
+            {/* Round Snapshots Section - Detached below game board */}
+            {hasStarted && (
+                <div className="mt-6 bg-[#1a1a1a] border border-purple-500/30 rounded-2xl p-6">
+                  <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    <span>📸</span>
+                    <span>Round Snapshots</span>
+                    {snapshots.size > 0 && (
+                      <span className="text-xs text-gray-400 ml-2">
+                        ({snapshots.size} players, {roundEndSnapshots.size} with end snapshots)
+                      </span>
+                    )}
+                  </h3>
+                  {loadingSnapshots ? (
+                    <div className="text-gray-400 text-sm">Loading snapshots...</div>
+                  ) : snapshots.size === 0 ? (
+                    <div className="text-gray-400 text-sm">
+                      No snapshots available yet. Snapshots will appear after rounds are finalized.
+                      {game && Number(game.currentRound) > 0 && (
+                        <div className="text-xs text-gray-500 mt-2">
+                          Current round: {game.currentRound} | Game started: {hasStarted ? 'Yes' : 'No'}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse">
+                        <thead>
+                          <tr className="border-b border-gray-700">
+                            <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                              Players
+                            </th>
+                            {Array.from({ length: 10 }, (_, i) => i + 1).map((roundNum) => (
+                              <th
+                                key={roundNum}
+                                colSpan={2}
+                                className="text-center py-3 px-2 text-xs font-semibold text-gray-400"
+                              >
+                                <div className="flex flex-col gap-1">
+                                  <span>Round {roundNum}</span>
+                                  <div className="flex gap-1">
+                                    <span className="flex-1 text-[10px] font-normal text-gray-500 min-w-[100px]">Start</span>
+                                    <span className="flex-1 text-[10px] font-normal text-gray-500 min-w-[100px]">End</span>
+                                  </div>
+                                </div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {snapshots.size > 0 ? (
+                            Array.from(snapshots.entries()).map(([playerAddress, playerSnapshots]) => {
+                              const lastRound = playerSnapshots.size > 0 
+                                ? Math.max(...Array.from(playerSnapshots.keys()))
+                                : 0;
+                              const currentRound = Number(game.currentRound);
+                              const wasEliminated = lastRound > 0 && lastRound < currentRound;
+                              
+                              return (
+                                <tr
+                                  key={playerAddress}
+                                  className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${
+                                    wasEliminated ? 'opacity-60' : ''
+                                  }`}
+                                >
+                                  <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                                    <div className="flex items-center gap-2">
+                                      <span className="truncate max-w-[200px]">
+                                        {playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}
+                                      </span>
+                                      {wasEliminated && (
+                                        <span className="text-xs text-red-400 font-medium whitespace-nowrap">
+                                          (Eliminated)
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => {
+                                    const startETH = playerSnapshots.get(roundNum);
+                                    // For Round 2+, use previous round's End as Start if Start doesn't exist
+                                    // This handles the case where Round 2 Start = Round 1 End (same snapshot)
+                                    let displayStartETH = startETH;
+                                    if (!startETH && roundNum > 1) {
+                                      const prevRoundEnd = roundEndSnapshots.get(playerAddress)?.get(roundNum - 1);
+                                      if (prevRoundEnd) {
+                                        displayStartETH = prevRoundEnd;
+                                      }
+                                    }
+                                    
+                                    const endETH = roundEndSnapshots.get(playerAddress)?.get(roundNum);
+                                    const hasStart = displayStartETH !== undefined;
+                                    const hasEnd = endETH !== undefined;
+                                    const isEliminationRound = wasEliminated && roundNum === lastRound;
+                                    // Check if this Start value came from previous round's End
+                                    const startFromPrevEnd = !startETH && roundNum > 1 && displayStartETH !== undefined;
+                                    
+                                    return [
+                                      // Round Start Column
+                                      <td
+                                        key={`${playerAddress}-${roundNum}-start`}
+                                        className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${
+                                          hasStart
+                                            ? isEliminationRound
+                                              ? 'text-red-300 bg-red-500/5'
+                                              : 'text-purple-300 bg-purple-500/5'
+                                            : 'text-gray-600'
+                                        }`}
+                                      >
+                                        {hasStart ? (
+                                          <span 
+                                            className="font-semibold block" 
+                                            title={formatEther(displayStartETH) + ' ETH' + (startFromPrevEnd ? ' (from Round ' + (roundNum - 1) + ' End)' : '')}
+                                          >
+                                            {Number(formatEther(displayStartETH)).toFixed(6)} ETH
+                                          </span>
+                                        ) : (
+                                          <span className="text-gray-600">—</span>
+                                        )}
+                                      </td>,
+                                      // Round End Column
+                                      <td
+                                        key={`${playerAddress}-${roundNum}-end`}
+                                        className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${
+                                          hasEnd
+                                            ? isEliminationRound
+                                              ? 'text-red-300 bg-red-500/5 border-l border-red-500/20'
+                                              : 'text-green-300 bg-green-500/5 border-l border-green-500/20'
+                                            : 'text-gray-600 border-l border-gray-700/30'
+                                        }`}
+                                      >
+                                        {hasEnd ? (
+                                          <span className="font-semibold block" title={formatEther(endETH) + ' ETH'}>
+                                            {Number(formatEther(endETH)).toFixed(6)} ETH
+                                          </span>
+                                        ) : (
+                                          <span className="text-gray-600">—</span>
+                                        )}
+                                      </td>
+                                    ];
+                                  })}
+                                </tr>
+                              );
+                            })
+                          ) : (
+                            // Show placeholder rows for all players when snapshots haven't loaded yet
+                            gamePlayers && Array.from(gamePlayers as Address[]).map((playerAddress) => (
+                              <tr
+                                key={playerAddress}
+                                className="border-b border-gray-800/50 hover:bg-gray-800/20"
+                              >
+                                <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                                  <span className="truncate max-w-[200px]">
+                                    {playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}
+                                  </span>
+                                </td>
+                                {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => [
+                                  <td
+                                    key={`${playerAddress}-${roundNum}-start`}
+                                    className="py-3 px-3 text-center text-xs text-gray-600 whitespace-nowrap min-w-[120px]"
+                                  >
+                                    <span>—</span>
+                                  </td>,
+                                  <td
+                                    key={`${playerAddress}-${roundNum}-end`}
+                                    className="py-3 px-3 text-center text-xs text-gray-600 border-l border-gray-700/30 whitespace-nowrap min-w-[120px]"
+                                  >
+                                    <span>—</span>
+                                  </td>
+                                ])}
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="mt-4 text-xs text-gray-500">
+                    Snapshots are taken at the start of each round to calculate percentage gains.
+                  </div>
+                </div>
+              )}
+          </>
         ) : (
           <div className="max-w-2xl mx-auto text-center py-20">
             <h2 className="text-2xl font-semibold text-white mb-4">

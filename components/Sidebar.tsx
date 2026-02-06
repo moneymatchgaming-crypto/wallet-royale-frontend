@@ -1,12 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useReadContract } from 'wagmi';
 import { formatEther } from 'viem';
+import { contractABI, CONTRACT_ADDRESS } from '@/lib/contract';
 import StartGameButton from './StartGameButton';
 import RegistrationModal from './RegistrationModal';
 import PrizePoolBreakdown from './PrizePoolBreakdown';
 import FinalizeRoundButton from './FinalizeRoundButton';
 import CancelGameButton from './CancelGameButton';
+
+const ETH_PRICE_USD = 2500; // Approximate for "Earn ~$X.XX" display
 
 interface SidebarProps {
   gameId: number;
@@ -53,6 +57,17 @@ export default function Sidebar({
   const [showPrizePoolBreakdown, setShowPrizePoolBreakdown] = useState(false);
   const [countdown, setCountdown] = useState<string>('');
 
+  const { data: finalizationRewardWei } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: contractABI,
+    functionName: 'getFinalizationReward',
+    args: [BigInt(gameId), BigInt(currentRound)],
+    query: { enabled: !!roundShouldHaveEnded && gameId > 0 && currentRound > 0 },
+  });
+
+  const finalizationRewardEth = finalizationRewardWei !== undefined && finalizationRewardWei !== null ? Number(formatEther(finalizationRewardWei as bigint)) : 0;
+  const finalizationRewardUsd = finalizationRewardEth * ETH_PRICE_USD;
+
   // Debug: Log when showRegistration changes
   useEffect(() => {
     if (showRegistration) {
@@ -87,6 +102,17 @@ export default function Sidebar({
 
   return (
     <div className="w-80 space-y-4">
+      {/* Round Ready to Finalize - Prominent banner at top */}
+      {roundShouldHaveEnded && (
+        <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-4 rounded-lg mb-4 animate-pulse">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-2xl">⚡</span>
+            <h3 className="text-lg font-bold text-white">Round Ready to Finalize!</h3>
+          </div>
+          <p className="text-sm text-white/90">Be the first to finalize and earn the reward</p>
+        </div>
+      )}
+
       {/* Prize Pool - Yellow border like reference - Clickable */}
       <button
         onClick={() => setShowPrizePoolBreakdown(true)}
@@ -107,14 +133,6 @@ export default function Sidebar({
         </div>
       )}
       
-      {/* Round Pending Finalization Warning */}
-      {roundShouldHaveEnded && (
-        <div className="bg-yellow-900/20 border border-yellow-500/50 p-3">
-          <div className="text-xs text-yellow-400 mb-1">Round Ended</div>
-          <div className="text-sm text-yellow-300">Waiting for round finalization...</div>
-        </div>
-      )}
-
       {/* Round Info */}
       {currentRound > 0 && (
         <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
@@ -200,25 +218,36 @@ export default function Sidebar({
         />
       )}
 
-      {/* Finalize Round Button - Show when round should have ended */}
+      {/* Finalize Round - Opportunity section when round should have ended */}
       {roundShouldHaveEnded && (
-        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-4 rounded-lg">
-          <div className="text-sm font-semibold text-white mb-2">
+        <div className="bg-[#1a1a1a] border border-emerald-500/50 p-4 rounded-lg">
+          <div className="text-sm font-semibold text-white mb-3">
             Finalize Round {currentRound}
           </div>
-          <div className="text-xs text-[#9ca3af] mb-3">
-            Earn a reward for finalizing this round! You'll receive 1.5× your gas cost.
+          <div className="text-2xl font-bold text-emerald-400 mb-1 flex items-center gap-2">
+            <span>💰</span>
+            <span>Earn ~${finalizationRewardUsd < 0.01 ? '<0.01' : finalizationRewardUsd.toFixed(2)}</span>
           </div>
-          <FinalizeRoundButton
-            gameId={gameId}
-            roundNumber={currentRound}
-            onSuccess={() => {
-              // Refetch game data after successful finalization
-              if (onRegistrationSuccess) {
-                onRegistrationSuccess();
-              }
-            }}
-          />
+          <div className="text-xs text-[#9ca3af] mb-4">
+            ~{finalizationRewardEth.toFixed(6)} ETH reward for finalizing
+          </div>
+          <div className="mb-4">
+            <FinalizeRoundButton
+              gameId={gameId}
+              roundNumber={currentRound}
+              variant="prominent"
+              onSuccess={() => {
+                if (onRegistrationSuccess) {
+                  onRegistrationSuccess();
+                }
+              }}
+            />
+          </div>
+          <p className="text-xs text-[#9ca3af] space-y-1">
+            <span className="block">Anyone can finalize this round.</span>
+            <span className="block">First person gets 1.5× gas cost as reward.</span>
+            <span className="block text-emerald-400/90">Help progress the game and earn ETH!</span>
+          </p>
         </div>
       )}
 

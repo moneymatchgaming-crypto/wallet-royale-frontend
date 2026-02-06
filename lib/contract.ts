@@ -2,7 +2,7 @@ import { createPublicClient, http, getContract, Address } from 'viem';
 import { baseSepolia } from 'viem/chains';
 import contractAbi from './contract.json';
 
-export const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0xBaA57a85F524DcF363A534F3C4697563413496A7') as Address;
+export const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x7183D6E2F4aef370E9DBA84DBE2A1F5E38cdeD27') as Address;
 export const CHAIN_ID = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || '84532');
 
 // Validate ABI structure

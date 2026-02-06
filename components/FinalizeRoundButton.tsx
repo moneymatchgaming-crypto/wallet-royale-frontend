@@ -10,6 +10,8 @@ interface FinalizeRoundButtonProps {
   gameId: number;
   roundNumber: number;
   onSuccess?: () => void;
+  /** When 'prominent', uses larger button, green gradient, and pulse when ready */
+  variant?: 'default' | 'prominent';
 }
 
 /**
@@ -201,12 +203,31 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
         console.log(`📊 Player ${playerAddr.slice(0, 10)}...: startETH=${formatEther(startETH)} ETH, currentETH=${formatEther(currentETH)} ETH, gain=${gainPct.toFixed(2)}%`);
       }
 
+      // Get square index for tie-breaking (earlier registration = lower square index = better rank)
+      let squareIndex = 0;
+      try {
+        const playerInfo = await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: contractABI,
+          functionName: 'getPlayer',
+          args: [BigInt(gameId), playerAddr],
+        }) as any;
+        const playerArray = Array.isArray(playerInfo) ? playerInfo : [
+          playerInfo.squareIndex !== undefined ? playerInfo.squareIndex : playerInfo[0],
+        ];
+        squareIndex = Number(playerArray[0] || 0);
+      } catch {
+        // If we can't get square index, use 0 (will be sorted last in ties)
+        squareIndex = 0;
+      }
+
       playerData.push({
         address: playerAddr,
         startETH,
         currentETH,
         gainPct,
         alive: true,
+        squareIndex, // Add square index for tie-breaking
       });
     } else {
       eliminatedCount++;
@@ -321,11 +342,22 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
 
   console.log('Player rankings:', playerData.map(p => ({
     address: p.address.slice(0, 10) + '...',
-    gainPct: p.gainPct.toFixed(2) + '%'
+    gainPct: p.gainPct.toFixed(2) + '%',
+    squareIndex: (p as any).squareIndex
   })));
 
-  // Sort by gain percentage (highest first)
-  playerData.sort((a, b) => b.gainPct - a.gainPct);
+  // Sort by gain percentage (highest first), then by square index (lower = earlier registration = better rank in ties)
+  // This ensures deterministic elimination when players have the same gain percentage
+  playerData.sort((a, b) => {
+    // First sort by gain percentage (descending)
+    if (b.gainPct !== a.gainPct) {
+      return b.gainPct - a.gainPct;
+    }
+    // Tie-breaker: Lower square index = earlier registration = better rank
+    const aSquare = (a as any).squareIndex || 999;
+    const bSquare = (b as any).squareIndex || 999;
+    return aSquare - bSquare;
+  });
 
   // Determine cutoff
   const cutoffRank = Number(roundArray[4]);
@@ -395,6 +427,7 @@ export default function FinalizeRoundButton({
   gameId,
   roundNumber,
   onSuccess,
+  variant = 'default',
 }: FinalizeRoundButtonProps) {
   const { address } = useAccount();
   const [estimatedReward, setEstimatedReward] = useState<bigint | null>(null);
@@ -673,11 +706,15 @@ export default function FinalizeRoundButton({
         onClick={(e) => handleFinalize(e)}
         disabled={isDisabled}
         className={`
-          w-full px-4 py-3 rounded-lg font-semibold transition-all
+          w-full rounded-lg font-semibold transition-all
+          ${variant === 'prominent' ? 'py-4 px-6 text-lg' : 'px-4 py-3'}
           ${isDisabled
             ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
-            : 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white shadow-lg hover:shadow-xl'
+            : variant === 'prominent'
+              ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white shadow-lg hover:shadow-xl'
+              : 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white shadow-lg hover:shadow-xl'
           }
+          ${variant === 'prominent' && !isDisabled ? 'animate-pulse' : ''}
         `}
       >
         {isPending || isConfirming
