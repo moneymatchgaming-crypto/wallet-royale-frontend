@@ -85,8 +85,23 @@ export default function PrizePoolBreakdown({
               </div>
               <div className="text-sm text-green-400 font-semibold">70%</div>
             </div>
-            <div className="text-xs text-gray-500">
-              Paid to the winner when game ends
+            <div className="text-xs text-gray-500 mb-3">
+              Paid to Top 3 by performance (60% / 30% / 10%) when game ends
+            </div>
+            {/* Top 3 prize breakdown */}
+            <div className="space-y-2 pt-2 border-t border-green-500/30">
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-[#fbbf24]">🥇 1st (60%)</span>
+                <span className="font-mono text-white">{formatEther((prizePoolAmount * 60n) / 100n)} ETH</span>
+              </div>
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-gray-300">🥈 2nd (30%)</span>
+                <span className="font-mono text-white">{formatEther((prizePoolAmount * 30n) / 100n)} ETH</span>
+              </div>
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-amber-600">🥉 3rd (10%)</span>
+                <span className="font-mono text-white">{formatEther((prizePoolAmount * 10n) / 100n)} ETH</span>
+              </div>
             </div>
           </div>
 

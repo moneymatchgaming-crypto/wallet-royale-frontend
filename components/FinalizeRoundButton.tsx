@@ -500,71 +500,28 @@ export default function FinalizeRoundButton({
     setLoadingReward(true);
     
     try {
-      // Calculate which players should be eliminated
-      console.log('Calculating eliminated players...');
-      const calculatedEliminatedPlayers = await getEliminatedPlayers(gameId, roundNumber);
-      
-      // CHANGED: Allow empty array (means everyone advances or game ends)
-      console.log(`${calculatedEliminatedPlayers.length} players to eliminate`);
-      
-      // Log what will happen after finalization
-      if (calculatedEliminatedPlayers.length === 0) {
-        console.log('📋 No players to eliminate - all players will survive this round');
-        console.log('📋 After finalization:');
-        console.log('   - Round will be marked as finalized');
-        console.log('   - If 2+ players remain, next round will start automatically');
-        console.log('   - New snapshot will be taken for the next round');
-        console.log('   - If only 1 player remains, game will end');
-      } else {
-        console.log(`📋 ${calculatedEliminatedPlayers.length} players will be eliminated`);
-        console.log('📋 After finalization:');
-        console.log('   - Round will be marked as finalized');
-        console.log('   - Remaining players will advance to next round');
-        console.log('   - New snapshot will be taken for the next round');
-      }
-
-      // Create public client for simulation
+      // Eliminations are computed on-chain; we only pass gameId, roundNumber, gasCost
+      console.log('Simulating finalization (on-chain elimination)...');
       const { createPublicClient, http } = await import('viem');
       const { baseSepolia } = await import('viem/chains');
-      
       const publicClient = createPublicClient({
         chain: baseSepolia,
-        transport: http('https://sepolia.base.org', {
-          retryCount: 3,
-          retryDelay: 1000,
-          timeout: 10000,
-        }),
+        transport: http('https://sepolia.base.org', { retryCount: 3, retryDelay: 1000, timeout: 10000 }),
       });
-
-      // Simulate the call to check if it will succeed
-      console.log('Simulating finalization...');
       await publicClient.simulateContract({
         address: CONTRACT_ADDRESS,
         abi: contractABI,
         functionName: 'finalizeRound',
-        args: [
-          BigInt(gameId),
-          BigInt(roundNumber),
-          calculatedEliminatedPlayers, // Can be empty array
-          0n,
-        ],
+        args: [BigInt(gameId), BigInt(roundNumber), 0n],
         account: address,
       });
-
       console.log('✓ Simulation passed, sending transaction...');
-      
-      // If simulation passes, send the transaction
       writeContract({
         address: CONTRACT_ADDRESS,
         abi: contractABI,
         functionName: 'finalizeRound',
-        args: [
-          BigInt(gameId),
-          BigInt(roundNumber),
-          calculatedEliminatedPlayers,
-          0n,
-        ],
-        gas: 2000000n, // Fixed 2M gas limit to ensure transaction completes
+        args: [BigInt(gameId), BigInt(roundNumber), 0n],
+        gas: 2000000n,
       });
       
     } catch (simError: any) {

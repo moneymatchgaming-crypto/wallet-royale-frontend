@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAccount, useReadContract } from 'wagmi';
@@ -10,6 +10,13 @@ import GameBoard from '@/components/GameBoard';
 import Sidebar from '@/components/Sidebar';
 import { Address } from 'viem';
 import { fetchGamePlayers, PlayerData } from '@/lib/gameHelpers';
+
+export interface WinnerData {
+  address: Address;
+  place: 1 | 2 | 3;
+  prize: bigint;
+  gainPercent: number | null;
+}
 
 interface GameData {
   gameId: bigint;
@@ -140,10 +147,9 @@ export default function GamePage() {
     query: { enabled: !!game && game.finalized && !game.cancelled },
   });
 
-  // Find the winner (alive player) if game is finalized - MUST be before conditional return
-  const [winner, setWinner] = useState<Address | null>(null);
+  // Top 3 winners (alive players sorted by gain %) - MUST be before conditional return
+  const [winners, setWinners] = useState<WinnerData[]>([]);
   const [prizeAmount, setPrizeAmount] = useState<bigint>(0n);
-  const [winnerGainPercent, setWinnerGainPercent] = useState<number | null>(null);
   const [losers, setLosers] = useState<Array<{ address: Address; gainPercent: number }>>([]);
   const [finalizationTxHash, setFinalizationTxHash] = useState<string | null>(null);
   const [eliminatedPlayers, setEliminatedPlayers] = useState<string[]>([]);
@@ -200,62 +206,67 @@ export default function GamePage() {
       hasPlayers: !!gamePlayers 
     });
     
-    // Helper function to calculate gain percentage for a player
-    const calculateGainPercent = async (playerAddress: Address): Promise<number | null> => {
+    // Helper: Final Gain from Round 1 Start to Final/Elimination Round End (pure gameplay, no registration/outside movements)
+    const calculateGameplayGainPercent = async (
+      playerAddress: Address,
+      isWinner: boolean,
+      totalRounds: number
+    ): Promise<number | null> => {
       try {
-        // Get player data to access startETH
-        const playerData = await publicClient.readContract({
+        const round1Start = await publicClient.readContract({
           address: CONTRACT_ADDRESS,
           abi: contractABI,
-          functionName: 'players',
-          args: [BigInt(gameId), playerAddress],
-        });
-        
-        // Player struct: [wallet, squareIndex, startETH, startUSDC, startAERO, startCAKE, 
-        //                 startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE,
-        //                 alive, registered, eliminationReason, registrationTime]
-        // startETH is at index 2
-        const playerArray = Array.isArray(playerData) ? playerData : [
-          playerData.wallet || playerData[0],
-          playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[1],
-          playerData.startETH !== undefined ? playerData.startETH : playerData[2],
-          playerData.startUSDC !== undefined ? playerData.startUSDC : playerData[3],
-          playerData.startAERO !== undefined ? playerData.startAERO : playerData[4],
-          playerData.startCAKE !== undefined ? playerData.startCAKE : playerData[5],
-          playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[6],
-          playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[7],
-          playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[8],
-          playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[9],
-          playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[10],
-          playerData.alive !== undefined ? playerData.alive : playerData[11],
-          playerData.registered !== undefined ? playerData.registered : playerData[12],
-          playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[13],
-          playerData.registrationTime !== undefined ? playerData.registrationTime : playerData[14],
-        ];
-        
-        const startETH = playerArray[2] as bigint;
-        
-        if (startETH === 0n) {
-          console.warn(`⚠️ Player ${playerAddress} has zero startETH`);
+          functionName: 'getRoundStartETH',
+          args: [BigInt(gameId), 1n, playerAddress],
+        }) as bigint;
+
+        if (round1Start === 0n) {
+          console.warn(`⚠️ Player ${playerAddress.slice(0, 10)}... has zero Round 1 Start ETH`);
           return null;
         }
-        
-        // Get current ETH balance directly from the wallet
-        const currentETH = await publicClient.getBalance({
-          address: playerAddress,
-        });
-        
-        // Calculate ETH percentage gain from game start to now
-        // gainPercent = ((currentETH - startETH) / startETH) * 100
-        const gain = currentETH - startETH;
-        const gainPercent = startETH > 0n 
-          ? Number((gain * 10000n) / startETH) / 100
-          : 0;
-        
-        console.log(`📊 Player ${playerAddress.slice(0, 10)}... ETH gain: ${gainPercent.toFixed(2)}% (start: ${formatEther(startETH)} ETH, current: ${formatEther(currentETH)} ETH)`);
-        return gainPercent;
+
+        let endETH: bigint;
+
+        if (isWinner) {
+          // Winner: find their last round with an end snapshot (working backwards from totalRounds)
+          let finalRoundEnd = 0n;
+          for (let round = totalRounds; round >= 1; round--) {
+            const roundEnd = await publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              functionName: 'getRoundEndETH',
+              args: [BigInt(gameId), BigInt(round), playerAddress],
+            }) as bigint;
+            if (roundEnd > 0n) {
+              finalRoundEnd = roundEnd;
+              break;
+            }
+          }
+          endETH = finalRoundEnd;
+        } else {
+          // Eliminated: find last round where they have an end snapshot (their elimination round)
+          let eliminationRoundEnd = 0n;
+          for (let round = totalRounds; round >= 1; round--) {
+            const roundEnd = await publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              functionName: 'getRoundEndETH',
+              args: [BigInt(gameId), BigInt(round), playerAddress],
+            }) as bigint;
+            if (roundEnd > 0n) {
+              eliminationRoundEnd = roundEnd;
+              break;
+            }
+          }
+          endETH = eliminationRoundEnd;
+        }
+
+        const finalGain = ((endETH - round1Start) * 10000n) / round1Start;
+        const finalGainPercent = Number(finalGain) / 100;
+        console.log(`📊 Player ${playerAddress.slice(0, 10)}... gameplay gain: ${finalGainPercent.toFixed(2)}% (Round 1 Start: ${formatEther(round1Start)} ETH, End: ${formatEther(endETH)} ETH)`);
+        return finalGainPercent;
       } catch (error) {
-        console.error(`❌ Error calculating gain for ${playerAddress}:`, error);
+        console.error(`❌ Error calculating gameplay gain for ${playerAddress}:`, error);
         return null;
       }
     };
@@ -301,7 +312,7 @@ export default function GamePage() {
         const calculatedPrizePool = (totalEntryFees * 70n) / 100n;
         setPrizeAmount(calculatedPrizePool);
 
-        // Find the winner (alive player) and all losers (eliminated players)
+        // Find Top 3 (alive players sorted by gain %) and all losers (eliminated players)
         const players = gamePlayers as Address[];
         console.log(`👥 Processing ${players.length} players for game #${gameId}`);
         
@@ -312,9 +323,9 @@ export default function GamePage() {
           return;
         }
         
+        const totalRounds = Number(game.totalRounds);
         const losersList: Array<{ address: Address; gainPercent: number }> = [];
-        let winnerAddress: Address | null = null;
-        let winnerGain: number | null = null;
+        const aliveWithGain: Array<{ address: Address; gainPercent: number | null }> = [];
 
         for (const player of players) {
           try {
@@ -329,16 +340,12 @@ export default function GamePage() {
             const isAlive = (playerData as any)[6] === true;
             console.log(`  Player ${player.slice(0, 10)}... - Alive: ${isAlive}`);
             
-            // Calculate gain percentage for this player (even if null, we'll still show the address)
-            const gainPercent = await calculateGainPercent(player);
+            // Final Gain = Round 1 Start → Final/Elimination Round End (gameplay only)
+            const gainPercent = await calculateGameplayGainPercent(player, isAlive, totalRounds);
             
             if (isAlive) {
-              // This is the winner
-              winnerAddress = player;
-              winnerGain = gainPercent;
-              console.log(`🏆 Winner found: ${player}, gain: ${winnerGain !== null ? winnerGain.toFixed(2) + '%' : 'N/A'}`);
+              aliveWithGain.push({ address: player, gainPercent });
             } else {
-              // This is a loser (eliminated player) - add even if gainPercent is null
               losersList.push({ 
                 address: player, 
                 gainPercent: gainPercent !== null ? gainPercent : 0 
@@ -346,46 +353,49 @@ export default function GamePage() {
             }
           } catch (error) {
             console.error(`❌ Error checking player ${player}:`, error);
-            // Still add to losers list even if we can't get full data
             losersList.push({ address: player, gainPercent: 0 });
           }
         }
 
+        // Sort alive by gain % descending (best first), take Top 3
+        aliveWithGain.sort((a, b) => {
+          const ga = a.gainPercent ?? -Infinity;
+          const gb = b.gainPercent ?? -Infinity;
+          return gb - ga;
+        });
+        const pool = calculatedPrizePool;
+        const firstPlace = (pool * 60n) / 100n;
+        const secondPlace = (pool * 30n) / 100n;
+        const thirdPlace = (pool * 10n) / 100n;
+        const winnersList: WinnerData[] = [];
+        if (aliveWithGain.length >= 1) winnersList.push({ address: aliveWithGain[0].address, place: 1, prize: firstPlace, gainPercent: aliveWithGain[0].gainPercent });
+        if (aliveWithGain.length >= 2) winnersList.push({ address: aliveWithGain[1].address, place: 2, prize: secondPlace, gainPercent: aliveWithGain[1].gainPercent });
+        if (aliveWithGain.length >= 3) winnersList.push({ address: aliveWithGain[2].address, place: 3, prize: thirdPlace, gainPercent: aliveWithGain[2].gainPercent });
+
         // Sort losers by gain percentage (worst first)
         losersList.sort((a, b) => a.gainPercent - b.gainPercent);
 
-        console.log(`✅ Setting winner: ${winnerAddress}, losers: ${losersList.length}`);
-        setWinner(winnerAddress);
-        setWinnerGainPercent(winnerGain);
+        console.log(`✅ Setting Top 3 winners: ${winnersList.length}, losers: ${losersList.length}`);
+        setWinners(winnersList);
         setLosers(losersList);
         
-        // Use Basescan API to find the internal transaction that paid the winner
-        if (winnerAddress) {
+        // Use Basescan API to find a payout tx (e.g. to 1st place)
+        if (winnersList.length > 0) {
           try {
-            console.log('📡 Querying Basescan API for internal transactions to winner:', winnerAddress);
+            const firstWinner = winnersList[0].address;
+            console.log('📡 Querying Basescan API for internal transactions to winner:', firstWinner);
             const basescanUrl = `https://api-sepolia.basescan.org/api?module=account&action=txlistinternal&address=${CONTRACT_ADDRESS}&startblock=0&endblock=99999999&sort=desc&apikey=YourApiKeyToken`;
-            
             const response = await fetch(basescanUrl);
             const data = await response.json();
-            
-            console.log('📥 Basescan API response:', { 
-              status: data.status, 
-              message: data.message, 
-              resultCount: data.result?.length || 0 
-            });
-            
             if (data.status === '1' && data.result && Array.isArray(data.result)) {
               const payoutTx = data.result.find((tx: any) => 
-                tx.to && tx.to.toLowerCase() === winnerAddress!.toLowerCase() &&
+                tx.to && tx.to.toLowerCase() === firstWinner.toLowerCase() &&
                 parseFloat(tx.value) > 0 &&
                 tx.from && tx.from.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
               );
-              
               if (payoutTx) {
                 setFinalizationTxHash(payoutTx.hash);
                 console.log('✅ Found prize payout transaction:', payoutTx.hash);
-              } else {
-                console.warn('⚠️ No matching payout transaction found');
               }
             }
           } catch (apiError) {
@@ -597,10 +607,9 @@ export default function GamePage() {
     calculateEliminatedPlayers();
   }, [roundShouldHaveEnded, allPlayersForRanking, game, gameId, currentRoundNum, cutoffRank, timeRemaining, isFinished, roundFinalized]);
 
-  // Fetch snapshots for all rounds (only for rounds where player was alive)
-  // Fetch immediately when game starts to show Round 1 Start balances
+  // Fetch snapshots for all rounds (when game has started or is finalized, so Game Progression has data)
   useEffect(() => {
-    if (!game || !hasStarted || isFinished) return;
+    if (!game || (!hasStarted && !game.finalized) || game.cancelled) return;
 
     const fetchSnapshots = async () => {
       setLoadingSnapshots(true);
@@ -629,7 +638,7 @@ export default function GamePage() {
         }
         const totalRounds = Number(game.totalRounds);
         const currentRound = Number(game.currentRound);
-        const maxRound = Math.max(currentRound, 1);
+        const maxRound = game.finalized ? totalRounds : Math.max(currentRound, 1);
 
         // First, check which rounds are finalized (do this once for all players)
         const finalizedRounds = new Set<number>();
@@ -692,9 +701,9 @@ export default function GamePage() {
             continue;
           }
           
-          // Fetch Round End snapshots for all finalized rounds (independent of Start snapshots)
-          // This ensures we capture end balances even if player was eliminated during the round
-          for (const round of finalizedRounds) {
+          // Fetch Round End snapshots for all rounds 1..maxRound so we don't miss any round
+          // (e.g. round 3 end can be missing if we only queried finalizedRounds and that round was mis-detected)
+          for (let round = 1; round <= maxRound; round++) {
             try {
               const endETH = await publicClient.readContract({
                 address: CONTRACT_ADDRESS,
@@ -702,14 +711,14 @@ export default function GamePage() {
                 functionName: 'getRoundEndETH',
                 args: [BigInt(gameId), BigInt(round), player],
               }) as bigint;
-              
-              // Store it even if 0, because 0 is a valid balance
-              // Note: If player was eliminated DURING the round (violations), they won't have a Round End snapshot
-              // because the contract only snapshots alive players at finalization time
-              // But if they were alive at finalization, they should have a snapshot
-              // We're already in the loop for finalized rounds, so always store if we got here
-              playerRoundEnds.set(round, endETH);
-              console.log(`✓ Round ${round} End ETH for ${player.slice(0, 8)}...: ${formatEther(endETH)} ETH`);
+              // Store if we have a value: non-zero means snapshot exists; 0 only stored when round is finalized
+              // (contract returns 0 for unset mapping, so we treat 0 as "no data" unless round is finalized)
+              if (endETH > 0n || finalizedRounds.has(round)) {
+                playerRoundEnds.set(round, endETH);
+                if (endETH > 0n) {
+                  console.log(`✓ Round ${round} End ETH for ${player.slice(0, 8)}...: ${formatEther(endETH)} ETH`);
+                }
+              }
             } catch (endError) {
               console.debug(`No Round ${round} End snapshot for ${player.slice(0, 8)}... (player may have been eliminated during round):`, endError);
             }
@@ -793,7 +802,7 @@ export default function GamePage() {
     };
 
     fetchSnapshots();
-  }, [game, hasStarted, isFinished, gamePlayers, gameId, game?.currentRound]);
+  }, [game, hasStarted, isFinished, game?.finalized, gamePlayers, gameId, game?.currentRound, game?.totalRounds]);
 
   // Conditional return - MUST be after all hooks
   if (!game) {
@@ -967,7 +976,7 @@ export default function GamePage() {
                         </thead>
                         <tbody>
                           {snapshots.size > 0 ? (
-                            Array.from(snapshots.entries()).map(([playerAddress, playerSnapshots]) => {
+                            Array.from(snapshots.entries()).map(([playerAddress, playerSnapshots]): React.ReactElement => {
                               const lastRound = playerSnapshots.size > 0 
                                 ? Math.max(...Array.from(playerSnapshots.keys()))
                                 : 0;
@@ -1024,7 +1033,7 @@ export default function GamePage() {
                                             : 'text-gray-600'
                                         }`}
                                       >
-                                        {hasStart ? (
+                                        {hasStart && displayStartETH !== undefined ? (
                                           <span 
                                             className="font-semibold block" 
                                             title={formatEther(displayStartETH) + ' ETH' + (startFromPrevEnd ? ' (from Round ' + (roundNum - 1) + ' End)' : '')}
@@ -1046,7 +1055,7 @@ export default function GamePage() {
                                             : 'text-gray-600 border-l border-gray-700/30'
                                         }`}
                                       >
-                                        {hasEnd ? (
+                                        {hasEnd && endETH !== undefined ? (
                                           <span className="font-semibold block" title={formatEther(endETH) + ' ETH'}>
                                             {Number(formatEther(endETH)).toFixed(6)} ETH
                                           </span>
@@ -1061,7 +1070,7 @@ export default function GamePage() {
                             })
                           ) : (
                             // Show placeholder rows for all players when snapshots haven't loaded yet
-                            gamePlayers && Array.from(gamePlayers as Address[]).map((playerAddress) => (
+                            gamePlayers ? Array.from(gamePlayers as Address[]).map((playerAddress): React.ReactElement => (
                               <tr
                                 key={playerAddress}
                                 className="border-b border-gray-800/50 hover:bg-gray-800/20"
@@ -1086,7 +1095,7 @@ export default function GamePage() {
                                   </td>
                                 ])}
                               </tr>
-                            ))
+                            )) : null
                           )}
                         </tbody>
                       </table>
@@ -1117,51 +1126,101 @@ export default function GamePage() {
                   </div>
                 )}
                 
-                {winner && (
-                  <div className="bg-[#1a1a1a] border border-purple-500/50 p-6 rounded-2xl mb-6">
-                    <div className="text-xs text-[#9ca3af] mb-2">Winner</div>
-                    <div className="text-xl font-semibold text-purple-400 font-mono break-all mb-3">
-                      {winner}
-                    </div>
-                    {winnerGainPercent !== null && (
-                      <div className="flex justify-between items-center pt-3 border-t border-gray-700">
-                        <span className="text-sm text-[#9ca3af]">Final Gain:</span>
-                        <span className={`text-xl font-semibold ${winnerGainPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {winnerGainPercent >= 0 ? '+' : ''}{winnerGainPercent.toFixed(2)}%
-                        </span>
+                {winners.length > 0 && (
+                  <div className="space-y-6 mb-6">
+                    {/* 1st place: full card with gold gradient */}
+                    {winners[0] && (
+                      <div className="flex flex-wrap items-stretch gap-4">
+                        <div className="flex-1 min-w-[280px] bg-gradient-to-br from-[#1a1a1a] to-amber-950/30 border-2 border-[#fbbf24] p-6 rounded-2xl shadow-lg shadow-amber-500/10">
+                          <div className="text-xs text-amber-400/90 mb-1">🥇 1st Place</div>
+                          <div className="text-xl font-semibold text-amber-200 font-mono break-all mb-2">
+                            {winners[0].address}
+                          </div>
+                          <div className="flex justify-between items-center pt-3 border-t border-amber-500/30">
+                            <span className="text-sm text-amber-200/80">Prize</span>
+                            <span className="text-xl font-bold text-[#fbbf24]">{formatEther(winners[0].prize)} ETH</span>
+                          </div>
+                          <div className="flex justify-between items-center pt-2">
+                            <span className="text-sm text-amber-200/80">Final Gain</span>
+                            <span className={`text-lg font-semibold ${(winners[0].gainPercent ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {winners[0].gainPercent !== null ? `${winners[0].gainPercent >= 0 ? '+' : ''}${winners[0].gainPercent.toFixed(2)}%` : 'N/A'}
+                            </span>
+                          </div>
+                          {finalizationTxHash && (
+                            <a
+                              href={`https://sepolia.basescan.org/tx/${finalizationTxHash}#internaltx`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-amber-400 hover:text-amber-300 hover:underline mt-3 block"
+                            >
+                              View prize payout tx →
+                            </a>
+                          )}
+                        </div>
+                        <div className="bg-[#1a1a1a] border border-[#fbbf24] p-6 rounded-2xl min-w-[200px]">
+                          <div className="text-xs text-[#9ca3af] mb-1">Prize Pool (Paid Out)</div>
+                          <div className="text-2xl font-semibold text-[#10b981]">
+                            {prizeAmount > 0n ? formatEther(prizeAmount) : formatEther(game.prizePool || 0n)} ETH
+                          </div>
+                          <div className="text-xs text-gray-500 mt-2">60% / 30% / 10% to Top 3</div>
+                          {prizeAmount === 0n && game.prizePool === 0n && (
+                            <div className="text-xs text-yellow-400 mt-2">
+                              Calculated: {formatEther((game.entryFee * game.playerCount * 70n) / 100n)} ETH
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
-                    {winnerGainPercent === null && (
-                      <div className="text-xs text-yellow-400 mt-3">Gain percentage unavailable</div>
-                    )}
-                    {finalizationTxHash ? (
-                      <a
-                        href={`https://sepolia.basescan.org/tx/${finalizationTxHash}#internaltx`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-purple-400 hover:text-purple-300 hover:underline mt-3 block"
-                      >
-                        View Prize Payout Internal Transaction ({formatEther(prizeAmount > 0n ? prizeAmount : game.prizePool || 0n)} ETH sent to {winner.slice(0, 6)}...{winner.slice(-4)}) →
-                      </a>
-                    ) : winner && (
-                      <a
-                        href={`https://sepolia.basescan.org/address/${CONTRACT_ADDRESS}#internaltx`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-purple-400 hover:text-purple-300 hover:underline mt-3 block"
-                      >
-                        View Contract Internal Transactions (search for {winner.slice(0, 6)}...{winner.slice(-4)}) →
-                      </a>
+                    {/* 2nd and 3rd: side-by-side smaller cards */}
+                    {(winners[1] || winners[2]) && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {winners[1] && (
+                          <div className="bg-[#1a1a1a] border border-gray-400/50 p-4 rounded-xl">
+                            <div className="text-xs text-gray-400 mb-1">🥈 2nd Place</div>
+                            <div className="text-sm font-mono text-gray-300 truncate mb-2" title={winners[1].address}>
+                              {winners[1].address.slice(0, 6)}...{winners[1].address.slice(-4)}
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span className="text-gray-500">Prize</span>
+                              <span className="font-semibold text-[#10b981]">{formatEther(winners[1].prize)} ETH</span>
+                            </div>
+                            <div className="flex justify-between text-sm mt-1">
+                              <span className="text-gray-500">Gain</span>
+                              <span className={winners[1].gainPercent !== null && winners[1].gainPercent >= 0 ? 'text-green-400' : 'text-red-400'}>
+                                {winners[1].gainPercent !== null ? `${winners[1].gainPercent >= 0 ? '+' : ''}${winners[1].gainPercent.toFixed(2)}%` : 'N/A'}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                        {winners[2] && (
+                          <div className="bg-[#1a1a1a] border border-amber-700/50 p-4 rounded-xl">
+                            <div className="text-xs text-amber-600/90 mb-1">🥉 3rd Place</div>
+                            <div className="text-sm font-mono text-gray-300 truncate mb-2" title={winners[2].address}>
+                              {winners[2].address.slice(0, 6)}...{winners[2].address.slice(-4)}
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span className="text-gray-500">Prize</span>
+                              <span className="font-semibold text-[#10b981]">{formatEther(winners[2].prize)} ETH</span>
+                            </div>
+                            <div className="flex justify-between text-sm mt-1">
+                              <span className="text-gray-500">Gain</span>
+                              <span className={winners[2].gainPercent !== null && winners[2].gainPercent >= 0 ? 'text-green-400' : 'text-red-400'}>
+                                {winners[2].gainPercent !== null ? `${winners[2].gainPercent >= 0 ? '+' : ''}${winners[2].gainPercent.toFixed(2)}%` : 'N/A'}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
-                
-                {!winner && !loadingWinnerData && gamePlayers && (gamePlayers as Address[]).length > 0 && (
+
+                {winners.length === 0 && !loadingWinnerData && gamePlayers && (gamePlayers as Address[]).length > 0 && (
                   <div className="bg-[#1a1a1a] border border-yellow-500/50 p-6 rounded-2xl mb-6">
-                    <div className="text-yellow-400">No winner found. All players may have been eliminated.</div>
+                    <div className="text-yellow-400">No winners found. All players may have been eliminated.</div>
                   </div>
                 )}
-                
+
                 {losers.length > 0 && (
                   <div className="bg-[#1a1a1a] border border-gray-700 p-6 rounded-2xl mb-6">
                     <div className="text-xs text-[#9ca3af] mb-4">Eliminated Players ({losers.length})</div>
@@ -1182,28 +1241,112 @@ export default function GamePage() {
                     </div>
                   </div>
                 )}
-                
-                <div className="bg-[#1a1a1a] border border-[#fbbf24] p-4 inline-block">
-                  <div className="text-xs text-[#9ca3af] mb-1">Prize Pool (Paid Out)</div>
-                  <div className="text-2xl font-semibold text-[#10b981]">
-                    {prizeAmount > 0n ? formatEther(prizeAmount) : formatEther(game.prizePool || 0n)} ETH
-                  </div>
-                  {prizeAmount === 0n && game.prizePool === 0n && (
-                    <div className="text-xs text-yellow-400 mt-2">
-                      Calculated: {formatEther((game.entryFee * game.playerCount * 70n) / 100n)} ETH
+
+                {/* Round Snapshots (Start / End ETH per round) - at bottom of finished game data */}
+                {!game.cancelled && (
+                  <div className="mt-6 w-full max-w-6xl mx-auto bg-[#1a1a1a] border border-purple-500/30 rounded-2xl p-6 mb-6">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <span>📸</span>
+                      <span>Round Snapshots</span>
+                      {snapshots.size > 0 && (
+                        <span className="text-xs text-gray-400 ml-2">
+                          ({snapshots.size} players, {roundEndSnapshots.size} with end snapshots)
+                        </span>
+                      )}
+                    </h3>
+                    {loadingSnapshots ? (
+                      <div className="text-gray-400 text-sm">Loading snapshots...</div>
+                    ) : snapshots.size === 0 && roundEndSnapshots.size === 0 ? (
+                      <div className="text-gray-400 text-sm">No snapshot data available for this game.</div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full border-collapse">
+                          <thead>
+                            <tr className="border-b border-gray-700">
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">Players</th>
+                              {Array.from({ length: 10 }, (_, i) => i + 1).map((roundNum) => (
+                                <th key={roundNum} colSpan={2} className="text-center py-3 px-2 text-xs font-semibold text-gray-400">
+                                  <div className="flex flex-col gap-1">
+                                    <span>Round {roundNum}</span>
+                                    <div className="flex gap-1">
+                                      <span className="flex-1 text-[10px] font-normal text-gray-500 min-w-[100px]">Start</span>
+                                      <span className="flex-1 text-[10px] font-normal text-gray-500 min-w-[100px]">End</span>
+                                    </div>
+                                  </div>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {snapshots.size > 0 ? (
+                              Array.from(snapshots.entries()).map(([playerAddress, playerSnapshots]): React.ReactElement => {
+                                const totalRounds = Number(game?.totalRounds ?? 0);
+                                const winnerSet = new Set(winners.map((w) => w.address.toLowerCase()));
+                                const wasEliminated = winnerSet.size > 0 && !winnerSet.has(playerAddress.toLowerCase());
+                                const winnerEntry = winners.find((w) => w.address.toLowerCase() === playerAddress.toLowerCase());
+                                const placeLabel = winnerEntry ? (winnerEntry.place === 1 ? '1st' : winnerEntry.place === 2 ? '2nd' : '3rd') : null;
+                                return (
+                                  <tr
+                                    key={playerAddress}
+                                    className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${wasEliminated ? 'opacity-60' : ''} ${winnerEntry ? (winnerEntry.place === 1 ? 'ring-1 ring-[#fbbf24]/50' : winnerEntry.place === 2 ? 'ring-1 ring-gray-400/40' : 'ring-1 ring-amber-600/40') : ''}`}
+                                  >
+                                    <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                                      <div className="flex items-center gap-2">
+                                        <span className="truncate max-w-[200px]">{playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}</span>
+                                        {placeLabel && <span className={`text-xs font-semibold whitespace-nowrap ${winnerEntry!.place === 1 ? 'text-[#fbbf24]' : winnerEntry!.place === 2 ? 'text-gray-400' : 'text-amber-600'}`}>{placeLabel}</span>}
+                                        {wasEliminated && !winnerEntry && <span className="text-xs text-red-400 font-medium whitespace-nowrap">(Eliminated)</span>}
+                                      </div>
+                                    </td>
+                                    {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => {
+                                      const startETH = playerSnapshots.get(roundNum);
+                                      let displayStartETH = startETH;
+                                      if (!startETH && roundNum > 1) {
+                                        const prevRoundEnd = roundEndSnapshots.get(playerAddress)?.get(roundNum - 1);
+                                        if (prevRoundEnd) displayStartETH = prevRoundEnd;
+                                      }
+                                      const endETH = roundEndSnapshots.get(playerAddress)?.get(roundNum);
+                                      const hasStart = displayStartETH !== undefined;
+                                      const hasEnd = endETH !== undefined;
+                                      const isEliminationRound = wasEliminated && totalRounds > 0 && roundNum === totalRounds;
+                                      const startFromPrevEnd = !startETH && roundNum > 1 && displayStartETH !== undefined;
+                                      return [
+                                        <td
+                                          key={`${playerAddress}-${roundNum}-start`}
+                                          className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${hasStart ? (isEliminationRound ? 'text-red-300 bg-red-500/5' : 'text-purple-300 bg-purple-500/5') : 'text-gray-600'}`}
+                                        >
+                                          {hasStart && displayStartETH !== undefined ? <span className="font-semibold block" title={formatEther(displayStartETH) + ' ETH' + (startFromPrevEnd ? ' (from Round ' + (roundNum - 1) + ' End)' : '')}>{Number(formatEther(displayStartETH)).toFixed(6)} ETH</span> : <span className="text-gray-600">—</span>}
+                                        </td>,
+                                        <td
+                                          key={`${playerAddress}-${roundNum}-end`}
+                                          className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${hasEnd ? (isEliminationRound ? 'text-red-300 bg-red-500/5 border-l border-red-500/20' : 'text-green-300 bg-green-500/5 border-l border-green-500/20') : 'text-gray-600 border-l border-gray-700/30'}`}
+                                        >
+                                          {hasEnd && endETH !== undefined ? <span className="font-semibold block" title={formatEther(endETH) + ' ETH'}>{Number(formatEther(endETH)).toFixed(6)} ETH</span> : <span className="text-gray-600">—</span>}
+                                        </td>,
+                                      ];
+                                    })}
+                                  </tr>
+                                );
+                              })
+                            ) : (
+                              gamePlayers ? Array.from(gamePlayers as Address[]).map((playerAddress): React.ReactElement => (
+                                <tr key={playerAddress} className="border-b border-gray-800/50">
+                                  <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10"><span className="truncate max-w-[200px]">{playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}</span></td>
+                                  {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => [
+                                    <td key={`${playerAddress}-${roundNum}-start`} className="py-3 px-3 text-center text-xs text-gray-600 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
+                                    <td key={`${playerAddress}-${roundNum}-end`} className="py-3 px-3 text-center text-xs text-gray-600 border-l border-gray-700/30 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
+                                  ])}
+                                </tr>
+                              )) : null
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <div className="mt-4 text-xs text-gray-500">
+                      Snapshots are taken at the start and end of each round to calculate percentage gains.
                     </div>
-                  )}
-                  {finalizationTxHash && winner && (
-                    <a
-                      href={`https://sepolia.basescan.org/tx/${finalizationTxHash}#internaltx`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-purple-400 hover:text-purple-300 hover:underline mt-2 block"
-                    >
-                      View Prize Payout Internal Transaction ({formatEther(prizeAmount > 0n ? prizeAmount : game.prizePool || 0n)} ETH sent to {winner.slice(0, 6)}...{winner.slice(-4)}) →
-                    </a>
-                  )}
-                </div>
+                  </div>
+                )}
               </>
             )}
             {game.cancelled && (
