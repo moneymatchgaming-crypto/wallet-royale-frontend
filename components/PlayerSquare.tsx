@@ -25,16 +25,16 @@ export default function PlayerSquare({
 
   return (
     <div
-      className={`w-full h-full bg-[#1a1a1a] border ${
+      className={`w-full h-full rounded border flex flex-col items-center justify-center text-xs p-2 cursor-pointer transition-all ${
         isEliminated
-          ? 'border-[#2a2a2a] opacity-30'
-          : 'border-[#2a2a2a]'
-      } flex flex-col items-center justify-center text-xs p-2 cursor-pointer hover:border-[#3a3a3a] transition-all`}
+          ? 'border-white/10 bg-black/30 opacity-60'
+          : 'border-[var(--neon-blue)]/25 bg-black/40 hover:border-[var(--neon-blue)]/50'
+      }`}
       title={`Square #${squareIndex + 1} - Rank #${rank}`}
     >
-      <div className="text-[#9ca3af] text-[10px] mb-1">#{squareIndex + 1}</div>
+      <div className="text-gray-400 text-[10px] mb-1">#{squareIndex + 1}</div>
       {isEliminated ? (
-        <div className="text-[#9ca3af] text-[10px]">Eliminated</div>
+        <div className="text-gray-400 text-[10px]">Eliminated</div>
       ) : (
         <>
           <div className="text-white text-[11px] font-medium mb-1 truncate w-full text-center" title={player}>
@@ -43,7 +43,7 @@ export default function PlayerSquare({
           <div className={`font-semibold text-[12px] mb-1 ${gainColor}`}>
             {gainSign}{gainPercent.toFixed(2)}%
           </div>
-          <div className="text-[#9ca3af] text-[10px]">
+          <div className="text-gray-400 text-[10px]">
             {parseFloat(formatEther(balance)).toFixed(4)}
           </div>
         </>

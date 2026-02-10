@@ -3,23 +3,587 @@
 @tailwind utilities;
 
 :root {
-  --background: #030712; /* gray-950 */
+  --background: #030712;
   --foreground: #ffffff;
-  --panel-bg: rgba(31, 41, 55, 0.5); /* gray-800 with transparency */
-  --border-color: #374151; /* gray-700 */
-  --accent-purple: #c4b5fd; /* purple-400 */
-  --accent-purple-dark: #9333ea; /* purple-600 */
-  --accent-cyan: #06b6d4; /* cyan-500 */
+  --panel-bg: rgba(31, 41, 55, 0.5);
+  --border-color: #374151;
+  /* Arena / esports palette */
+  --arena-bg: #0a0a0f;
+  --arena-bg-deep: #050508;
+  --arena-navy: #0f172a;
+  --arena-charcoal: #1e1e28;
+  --neon-blue: #00d4ff;
+  --neon-blue-dim: rgba(0, 212, 255, 0.4);
+  --neon-pink: #ff2d95;
+  --neon-pink-dim: rgba(255, 45, 149, 0.4);
+  --neon-cyan: #22d3ee;
+  --neon-magenta: #e879f9;
+  --accent-purple: #c4b5fd;
+  --accent-purple-dark: #9333ea;
+  --accent-cyan: #06b6d4;
   --accent-yellow: #fbbf24;
   --accent-green: #10b981;
-  --text-muted: #6b7280; /* gray-500 */
+  --text-muted: #6b7280;
+  --glass-bg: rgba(15, 23, 42, 0.6);
+  --glass-border: rgba(0, 212, 255, 0.15);
+  --glow-blue: 0 0 20px rgba(0, 212, 255, 0.35), 0 0 40px rgba(0, 212, 255, 0.15);
+  --glow-pink: 0 0 20px rgba(255, 45, 149, 0.35), 0 0 40px rgba(255, 45, 149, 0.15);
+
+  /* Status filter – cyberpunk / gaming arena */
+  --arena-red: #FF3366;
+  --arena-red-alt: #E63946;
+  --arena-cyan: #00D9FF;
+  --arena-cyan-alt: #00B4D8;
+  --arena-bg-dark: #0A0E27;
+  --arena-bg-panel: #1A1D2E;
+  --filter-btn-bg: rgba(0, 0, 0, 0.6);
+  --filter-btn-bg-active: rgba(26, 29, 46, 0.85);
+  --filter-btn-border-inactive: rgba(0, 184, 216, 0.35);
+  --filter-btn-glow-inactive: 0 0 8px rgba(0, 217, 255, 0.2);
+  --filter-btn-border-active: #FF3366;
+  --filter-btn-glow-active: 0 0 20px rgba(255, 51, 102, 0.6);
+  --filter-btn-radius: 8px;
+  --filter-btn-transition: 0.3s ease;
+}
+
+/* Game page status badge: same look as filter buttons, compact (fits next to Game # title) */
+.game-status-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 24px; /* visible space between "Game #" title and badge */
+  padding: 5px 11px;
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--filter-btn-bg);
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.03) 0%, transparent 40%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+  border: 2px solid var(--filter-btn-border-inactive);
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    var(--filter-btn-glow-inactive);
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+.game-status-badge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0px, transparent 1px, rgba(0, 0, 0, 0.08) 1px, rgba(0, 0, 0, 0.08) 2px);
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0.5;
+}
+
+/* Create Game modal: solid dark panel (not transparent), text inset from edges, equal left/right space */
+.create-game-modal-panel {
+  box-sizing: border-box;
+  width: 28rem !important;
+  max-width: calc(100vw - 4rem) !important;
+  background: #0a0c14;
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.04) 0%, transparent 40%),
+    repeating-linear-gradient(0deg, transparent 0px, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+  border: 2px solid var(--filter-btn-border-inactive);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    var(--filter-btn-glow-inactive);
+  border-radius: 12px;
+  padding-left: 3rem !important;
+  padding-right: 3rem !important;
+  padding-bottom: 2rem !important;
+}
+
+/* Panels matching filter buttons: rounded, semi-transparent bg, cyan border */
+.arena-panel {
+  background: var(--filter-btn-bg);
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.03) 0%, transparent 40%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.12) 2px, rgba(0, 0, 0, 0.12) 4px);
+  border: 2px solid var(--filter-btn-border-inactive);
+  border-radius: var(--filter-btn-radius);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    var(--filter-btn-glow-inactive);
+}
+
+/* Deposit & Join – same glow as Connect Wallet / filter buttons */
+.sidebar-deposit-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 12px 16px;
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 0 8px rgba(0, 217, 255, 0.4);
+  background: rgba(0, 0, 0, 0.6);
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.04) 0%, transparent 50%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.2) 2px, rgba(0, 0, 0, 0.2) 4px);
+  border: 2px solid #00D9FF;
+  border-radius: var(--filter-btn-radius);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 15px rgba(0, 217, 255, 0.5);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, background 0.3s ease, transform 0.3s ease;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+.sidebar-deposit-btn:hover {
+  border-color: #00D9FF;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 20px rgba(0, 217, 255, 0.6),
+    0 0 30px rgba(0, 217, 255, 0.25);
+  color: #fff;
+}
+.sidebar-deposit-btn:active {
+  transform: scale(0.98);
+}
+
+/* Sidebar data stack: one block, rounded only on top and bottom; lines between are straight */
+.sidebar-data-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.sidebar-data-group .arena-panel:first-child {
+  border-radius: var(--filter-btn-radius) var(--filter-btn-radius) 0 0;
+}
+.sidebar-data-group .arena-panel:last-child {
+  border-radius: 0 0 var(--filter-btn-radius) var(--filter-btn-radius);
+}
+.sidebar-data-group .arena-panel:not(:first-child):not(:last-child) {
+  border-radius: 0;
+}
+.sidebar-data-group .arena-panel:not(:last-child) {
+  border-bottom-color: var(--filter-btn-border-inactive);
+}
+
+/* Side panel: no black text; default to white so all content is readable */
+.sidebar-root,
+.sidebar-root button:not([class*="text-"]) {
+  color: inherit;
+}
+.sidebar-root {
+  color: rgba(255, 255, 255, 0.95);
 }
 
 body {
   color: var(--foreground);
-  background: var(--background);
+  background: var(--arena-bg);
   min-height: 100vh;
   font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Full-viewport gradient overlay: darker overall, much darker at bottom */
+.arena-gradient-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(5, 5, 12, 0.2) 0%,
+    rgba(5, 5, 12, 0.4) 28%,
+    rgba(5, 5, 12, 0.6) 48%,
+    rgba(5, 5, 12, 0.75) 62%,
+    rgba(3, 3, 8, 0.92) 75%,
+    rgb(2, 2, 6) 86%,
+    rgb(2, 2, 6) 100%
+  );
+}
+
+/* Arena hero glow pulse */
+@keyframes arena-glow-pulse {
+  0%, 100% { opacity: 0.6; filter: brightness(1); }
+  50% { opacity: 1; filter: brightness(1.15); }
+}
+
+@keyframes arena-border-glow {
+  0%, 100% { box-shadow: 0 0 15px var(--neon-blue-dim), inset 0 0 15px transparent; }
+  50% { box-shadow: 0 0 25px var(--neon-blue-dim), 0 0 40px rgba(0, 212, 255, 0.1), inset 0 0 20px transparent; }
+}
+
+@keyframes light-streak {
+  0% { transform: translateX(-100%) scaleX(0.5); opacity: 0; }
+  40% { opacity: 0.3; }
+  100% { transform: translateX(100%) scaleX(1); opacity: 0; }
+}
+
+@keyframes neon-underline {
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+
+.arena-hero-glow {
+  animation: arena-glow-pulse 4s ease-in-out infinite;
+}
+
+.arena-border-glow {
+  animation: arena-border-glow 3s ease-in-out infinite;
+}
+
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+}
+
+.neon-text-blue {
+  text-shadow: 0 0 10px var(--neon-blue), 0 0 20px var(--neon-blue-dim);
+}
+
+.neon-text-pink {
+  text-shadow: 0 0 10px var(--neon-pink), 0 0 20px var(--neon-pink-dim);
+}
+
+/* Transparent plastic rectangle buttons */
+.plastic-rect {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.plastic-rect:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.plastic-rect-hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+.plastic-tint-red {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(248, 113, 113, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.plastic-tint-red:hover {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+.plastic-tint-blue {
+  background: rgba(0, 212, 255, 0.12);
+  border-color: rgba(56, 189, 248, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.plastic-tint-blue:hover {
+  background: rgba(0, 212, 255, 0.18);
+  border-color: rgba(56, 189, 248, 0.5);
+}
+.plastic-tint-muted {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* ----- Status filter buttons (cyberpunk / gaming arena) ----- */
+@keyframes filter-btn-glow-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 2px 2px 0 transparent, 0 0 20px rgba(255, 51, 102, 0.5); }
+  50% { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05), 2px 2px 0 transparent, 0 0 28px rgba(255, 51, 102, 0.7), 0 0 40px rgba(255, 51, 102, 0.25); }
+}
+.filter-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 100px;
+  padding: 12px 24px;
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(0, 217, 255, 0.9);
+  text-shadow: 0 0 10px rgba(0, 217, 255, 0.3);
+  background: var(--filter-btn-bg);
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.03) 0%, transparent 40%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+  border: 2px solid var(--filter-btn-border-inactive);
+  border-radius: var(--filter-btn-radius);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    var(--filter-btn-glow-inactive);
+  transition: border-color var(--filter-btn-transition), box-shadow var(--filter-btn-transition), background var(--filter-btn-transition), color var(--filter-btn-transition), transform var(--filter-btn-transition);
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Scanline overlay */
+.filter-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0px, transparent 1px, rgba(0, 0, 0, 0.08) 1px, rgba(0, 0, 0, 0.08) 2px);
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0.6;
+}
+.filter-btn:hover {
+  border-color: rgba(0, 217, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 0 14px rgba(0, 217, 255, 0.35),
+    0 0 24px rgba(0, 217, 255, 0.15);
+  color: #fff;
+  text-shadow: 0 0 12px rgba(0, 217, 255, 0.5);
+}
+.filter-btn:active {
+  transform: scale(0.98);
+}
+
+/* Active state: red/pink neon border + glow */
+.filter-btn.is-active {
+  background: var(--filter-btn-bg-active);
+  background-image:
+    linear-gradient(180deg, rgba(255, 51, 102, 0.08) 0%, transparent 50%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.12) 2px, rgba(0, 0, 0, 0.12) 4px);
+  border: 2px solid var(--filter-btn-border-active);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+    var(--filter-btn-glow-active);
+  color: #fff;
+  text-shadow: 0 0 12px rgba(255, 51, 102, 0.8);
+}
+.filter-btn.is-active:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    0 0 24px rgba(255, 51, 102, 0.7),
+    0 0 36px rgba(255, 51, 102, 0.35);
+}
+
+/* Live – optional pulse when active */
+.filter-btn--live.is-active {
+  animation: filter-btn-glow-pulse 2s ease-in-out infinite;
+}
+.filter-btn--live.is-active:hover {
+  animation: filter-btn-glow-pulse 1.4s ease-in-out infinite;
+}
+
+/* Variants only affect inactive text tint (active uses red/pink for all) */
+.filter-btn--open:not(.is-active) { color: rgba(0, 217, 255, 0.85); }
+.filter-btn--starting:not(.is-active) { color: rgba(0, 184, 216, 0.9); }
+.filter-btn--live:not(.is-active) { color: rgba(255, 51, 102, 0.7); }
+.filter-btn--finished:not(.is-active) { color: rgba(148, 163, 184, 0.9); }
+.filter-btn--all:not(.is-active) { color: rgba(226, 232, 240, 0.85); }
+
+/* ----- Wallet connect (compact navbar size) ----- */
+.wallet-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: 175px;
+  max-width: 200px;
+  height: 40px;
+  padding: 8px 14px;
+  flex-shrink: 0;
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #ffffff;
+  text-shadow: 0 0 8px rgba(0, 217, 255, 0.4);
+  background: rgba(0, 0, 0, 0.6);
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.04) 0%, transparent 50%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.2) 2px, rgba(0, 0, 0, 0.2) 4px);
+  border: 2px solid #00D9FF;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 15px rgba(0, 217, 255, 0.5);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, background 0.3s ease, transform 0.3s ease;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+.wallet-btn span {
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wallet-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0px, transparent 1px, rgba(0, 0, 0, 0.1) 1px, rgba(0, 0, 0, 0.1) 2px);
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0.5;
+}
+.wallet-btn:hover {
+  border-color: #00D9FF;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 20px rgba(0, 217, 255, 0.6),
+    0 0 30px rgba(0, 217, 255, 0.25);
+  color: #fff;
+}
+.wallet-btn:active {
+  transform: scale(0.98);
+}
+.wallet-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+/* Connected: red/pink accent, darker background */
+.wallet-btn--connected {
+  background: rgba(26, 29, 46, 0.9);
+  background-image:
+    linear-gradient(180deg, rgba(255, 51, 102, 0.06) 0%, transparent 50%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+  border: 2px solid #FF3366;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 10px rgba(255, 51, 102, 0.4);
+  color: #ffffff;
+  text-shadow: 0 0 8px rgba(255, 51, 102, 0.5);
+}
+.wallet-btn--connected:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 16px rgba(255, 51, 102, 0.55),
+    0 0 24px rgba(255, 51, 102, 0.2);
+}
+
+/* Create Game button – same look as wallet/filter (compact, neon) */
+.create-game-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 8px 14px;
+  flex-shrink: 0;
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #ffffff;
+  text-shadow: 0 0 8px rgba(255, 51, 102, 0.5);
+  background: rgba(0, 0, 0, 0.6);
+  background-image:
+    linear-gradient(180deg, rgba(255, 51, 102, 0.06) 0%, transparent 50%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.2) 2px, rgba(0, 0, 0, 0.2) 4px);
+  border: 2px solid #FF3366;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 10px rgba(255, 51, 102, 0.4);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+.create-game-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0px, transparent 1px, rgba(0, 0, 0, 0.1) 1px, rgba(0, 0, 0, 0.1) 2px);
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0.5;
+}
+.create-game-btn:hover {
+  border-color: #FF3366;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 16px rgba(255, 51, 102, 0.55),
+    0 0 24px rgba(255, 51, 102, 0.2);
+}
+.create-game-btn:active {
+  transform: scale(0.98);
+}
+
+/* Wallet dropdown panel */
+.wallet-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  z-index: 50;
+  min-width: 240px;
+  overflow: hidden;
+  background: var(--arena-bg-panel);
+  background-image: repeating-linear-gradient(0deg, transparent 0px, transparent 2px, rgba(0, 0, 0, 0.2) 2px, rgba(0, 0, 0, 0.2) 4px);
+  border: 2px solid var(--filter-btn-border-inactive);
+  border-radius: var(--filter-btn-radius);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 20px rgba(0, 0, 0, 0.4),
+    0 0 16px rgba(0, 217, 255, 0.15);
+}
+.wallet-dropdown__header {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.wallet-dropdown__label {
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(0, 217, 255, 0.7);
+  margin-bottom: 4px;
+}
+.wallet-dropdown__address {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #fff;
+  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+}
+.wallet-dropdown__item {
+  width: 100%;
+  padding: 12px 16px;
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  color: rgba(226, 232, 240, 0.9);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.wallet-dropdown__item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
 }
 
 @layer utilities {
@@ -177,9 +741,8 @@ body {
   margin-left: 0.25rem !important;
 }
 
-/* Ensure CreateGameModal styles override OnchainKit */
+/* Ensure CreateGameModal styles override OnchainKit (panel background from .create-game-modal-panel) */
 .create-game-modal {
-  background: transparent !important;
   backdrop-filter: blur(24px) !important;
   -webkit-backdrop-filter: blur(24px) !important;
 }
@@ -192,4 +755,72 @@ body {
 
 .create-game-modal label {
   color: rgb(196 181 253) !important;
+}
+
+/* Create Game panel footer buttons: same shape/height as filter buttons & status badge */
+.create-game-modal-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 12px 24px;
+  font-family: var(--font-orbitron), system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(0, 217, 255, 0.9);
+  text-shadow: 0 0 10px rgba(0, 217, 255, 0.3);
+  background: var(--filter-btn-bg);
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.03) 0%, transparent 40%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+  border: 2px solid var(--filter-btn-border-inactive);
+  border-radius: var(--filter-btn-radius);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    var(--filter-btn-glow-inactive);
+  transition: border-color var(--filter-btn-transition), box-shadow var(--filter-btn-transition), background var(--filter-btn-transition), color var(--filter-btn-transition), transform var(--filter-btn-transition);
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+.create-game-modal-btn:hover:not(:disabled) {
+  border-color: rgba(0, 217, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 0 14px rgba(0, 217, 255, 0.35),
+    0 0 24px rgba(0, 217, 255, 0.15);
+  color: #fff;
+}
+.create-game-modal-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.create-game-modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.create-game-modal-btn-primary {
+  background: var(--filter-btn-bg-active);
+  background-image:
+    linear-gradient(180deg, rgba(255, 51, 102, 0.08) 0%, transparent 50%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.12) 2px, rgba(0, 0, 0, 0.12) 4px);
+  border: 2px solid var(--filter-btn-border-active);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+    var(--filter-btn-glow-active);
+  color: #fff;
+  text-shadow: 0 0 12px rgba(255, 51, 102, 0.8);
+}
+.create-game-modal-btn-primary:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    0 0 24px rgba(255, 51, 102, 0.7),
+    0 0 36px rgba(255, 51, 102, 0.35);
 }

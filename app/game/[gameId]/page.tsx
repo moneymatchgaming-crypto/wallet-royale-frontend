@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAccount, useReadContract } from 'wagmi';
-import { formatEther, formatUnits } from 'viem';
+import { formatEther, formatUnits, parseAbiItem } from 'viem';
 import { CONTRACT_ADDRESS, contractABI, publicClient } from '@/lib/contract';
 import GameBoard from '@/components/GameBoard';
 import Sidebar from '@/components/Sidebar';
@@ -150,6 +150,10 @@ export default function GamePage() {
   // Top 3 winners (alive players sorted by gain %) - MUST be before conditional return
   const [winners, setWinners] = useState<WinnerData[]>([]);
   const [prizeAmount, setPrizeAmount] = useState<bigint>(0n);
+  /** Prize amounts for 1st / 2nd / 3rd (60% / 30% / 10%) so we always show them even when fewer than 3 winners */
+  const [prize1st, setPrize1st] = useState<bigint>(0n);
+  const [prize2nd, setPrize2nd] = useState<bigint>(0n);
+  const [prize3rd, setPrize3rd] = useState<bigint>(0n);
   const [losers, setLosers] = useState<Array<{ address: Address; gainPercent: number }>>([]);
   const [finalizationTxHash, setFinalizationTxHash] = useState<string | null>(null);
   const [eliminatedPlayers, setEliminatedPlayers] = useState<string[]>([]);
@@ -286,6 +290,9 @@ export default function GamePage() {
           cancelled: game?.cancelled,
           hasPlayers: !!gamePlayers
         });
+        setPrize1st(0n);
+        setPrize2nd(0n);
+        setPrize3rd(0n);
         setLoadingWinnerData(false);
         setWinnerDataError('Game not finalized or missing player data');
         return;
@@ -295,22 +302,41 @@ export default function GamePage() {
       setWinnerDataError(null);
       
       try {
-        // For known games, use their transaction hashes as fallback
-        const knownTransactions: Record<number, string> = {
-          1: '0xa8a58bec9356bab0ca6fdb209e4bebf09c04ce6e040da77a5153dd64cf8827ad',
-          2: '0x98d8f9240fd3288cd901a8122e3cead03d07e19fd551bba26055e4115e7da43d',
-        };
-        
-        if (knownTransactions[gameId]) {
-          console.log(`🎯 Setting known transaction hash for game #${gameId}`);
-          setFinalizationTxHash(knownTransactions[gameId]);
+        let finalizeTxHash: string | null = null;
+
+        // Get finalize transaction: same contract + RPC as snapshots. Use RoundFinalized — the
+        // latest one for this game is the final round's tx, which also calls finalizeGame (prize payouts).
+        try {
+          const blockNumber = await publicClient.getBlockNumber();
+          const fromBlock = blockNumber > 100_000n ? blockNumber - 100_000n : 0n;
+          const roundLogs = await publicClient.getLogs({
+            address: CONTRACT_ADDRESS,
+            event: parseAbiItem('event RoundFinalized(uint256 indexed gameId, uint256 roundNumber, uint256 survivors)'),
+            args: { gameId: BigInt(gameId) },
+            fromBlock,
+            toBlock: blockNumber,
+          });
+          // Latest RoundFinalized by block = final round = same tx as prize payouts
+          if (roundLogs.length > 0) {
+            const sorted = [...roundLogs].sort((a, b) => (b.blockNumber > a.blockNumber ? 1 : -1));
+            finalizeTxHash = sorted[0].transactionHash;
+            console.log('🎯 Finalize tx from latest RoundFinalized:', finalizeTxHash);
+          }
+        } catch (logError) {
+          console.warn('Could not fetch RoundFinalized logs for finalize tx:', logError);
         }
-        
-        // Calculate prize pool: 70% of total entry fees
-        // prizePool = entryFee * playerCount * 0.7
+
+        // Optional env fallback: set e.g. NEXT_PUBLIC_FINALIZE_TX_GAME_1=0x... for the current contract's tx
+        if (!finalizeTxHash && typeof process.env[`NEXT_PUBLIC_FINALIZE_TX_GAME_${gameId}`] === 'string') {
+          finalizeTxHash = process.env[`NEXT_PUBLIC_FINALIZE_TX_GAME_${gameId}`]!.trim();
+          if (finalizeTxHash.startsWith('0x')) console.log(`🎯 Using finalize tx from env for game #${gameId}`);
+        }
+
+        // Prize pool: use contract value when > 0 (pre-finalize), else 70% of total entry fees (post-finalize contract zeroes it)
         const totalEntryFees = game.entryFee * game.playerCount;
         const calculatedPrizePool = (totalEntryFees * 70n) / 100n;
-        setPrizeAmount(calculatedPrizePool);
+        const poolForDisplay = (game.prizePool != null && game.prizePool > 0n) ? game.prizePool : calculatedPrizePool;
+        setPrizeAmount(poolForDisplay);
 
         // Find Top 3 (alive players sorted by gain %) and all losers (eliminated players)
         const players = gamePlayers as Address[];
@@ -318,6 +344,9 @@ export default function GamePage() {
         
         if (players.length === 0) {
           console.warn('⚠️ No players found in game');
+          setPrize1st(0n);
+          setPrize2nd(0n);
+          setPrize3rd(0n);
           setWinnerDataError('No players found in this game');
           setLoadingWinnerData(false);
           return;
@@ -363,45 +392,27 @@ export default function GamePage() {
           const gb = b.gainPercent ?? -Infinity;
           return gb - ga;
         });
-        const pool = calculatedPrizePool;
+        const pool = poolForDisplay;
         const firstPlace = (pool * 60n) / 100n;
         const secondPlace = (pool * 30n) / 100n;
         const thirdPlace = (pool * 10n) / 100n;
+        setPrize1st(firstPlace);
+        setPrize2nd(secondPlace);
+        setPrize3rd(thirdPlace);
         const winnersList: WinnerData[] = [];
         if (aliveWithGain.length >= 1) winnersList.push({ address: aliveWithGain[0].address, place: 1, prize: firstPlace, gainPercent: aliveWithGain[0].gainPercent });
         if (aliveWithGain.length >= 2) winnersList.push({ address: aliveWithGain[1].address, place: 2, prize: secondPlace, gainPercent: aliveWithGain[1].gainPercent });
         if (aliveWithGain.length >= 3) winnersList.push({ address: aliveWithGain[2].address, place: 3, prize: thirdPlace, gainPercent: aliveWithGain[2].gainPercent });
 
-        // Sort losers by gain percentage (worst first)
-        losersList.sort((a, b) => a.gainPercent - b.gainPercent);
+        // Sort losers by gain percentage (best first) so order is 2nd, 3rd, 4th, 5th...
+        losersList.sort((a, b) => b.gainPercent - a.gainPercent);
 
         console.log(`✅ Setting Top 3 winners: ${winnersList.length}, losers: ${losersList.length}`);
         setWinners(winnersList);
         setLosers(losersList);
-        
-        // Use Basescan API to find a payout tx (e.g. to 1st place)
-        if (winnersList.length > 0) {
-          try {
-            const firstWinner = winnersList[0].address;
-            console.log('📡 Querying Basescan API for internal transactions to winner:', firstWinner);
-            const basescanUrl = `https://api-sepolia.basescan.org/api?module=account&action=txlistinternal&address=${CONTRACT_ADDRESS}&startblock=0&endblock=99999999&sort=desc&apikey=YourApiKeyToken`;
-            const response = await fetch(basescanUrl);
-            const data = await response.json();
-            if (data.status === '1' && data.result && Array.isArray(data.result)) {
-              const payoutTx = data.result.find((tx: any) => 
-                tx.to && tx.to.toLowerCase() === firstWinner.toLowerCase() &&
-                parseFloat(tx.value) > 0 &&
-                tx.from && tx.from.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
-              );
-              if (payoutTx) {
-                setFinalizationTxHash(payoutTx.hash);
-                console.log('✅ Found prize payout transaction:', payoutTx.hash);
-              }
-            }
-          } catch (apiError) {
-            console.error('❌ Basescan API query failed:', apiError);
-          }
-        }
+
+        // Only set the link when we have a tx from the current contract (getLogs above)
+        if (finalizeTxHash) setFinalizationTxHash(finalizeTxHash);
       } catch (error) {
         console.error('❌ Error in findWinnerAndLosers:', error);
         setWinnerDataError(error instanceof Error ? error.message : 'Failed to load winner data');
@@ -807,8 +818,9 @@ export default function GamePage() {
   // Conditional return - MUST be after all hooks
   if (!game) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <p className="text-gray-400">Loading game...</p>
+      <div className="min-h-screen relative flex items-center justify-center bg-[var(--arena-bg)]">
+        <div className="arena-gradient-overlay" aria-hidden />
+        <p className="relative z-10 text-gray-400">Loading game...</p>
       </div>
     );
   }
@@ -838,10 +850,19 @@ export default function GamePage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0f0f0f]">
-      <header className="border-b border-[#2a2a2a] bg-[#0f0f0f] px-4 sm:px-6 py-4 sticky top-0 z-40">
+    <div className="min-h-screen relative">
+      {/* Arena background + overlay (same as home) */}
+      <div
+        className="fixed inset-0 z-0 min-w-full min-h-full"
+        style={{ backgroundImage: 'url(/arena-bg.png)', backgroundSize: 'cover', backgroundPosition: 'top center', backgroundRepeat: 'no-repeat', backgroundColor: 'var(--arena-bg)' }}
+        aria-hidden
+      />
+      <div className="arena-gradient-overlay" aria-hidden />
+
+      <div className="relative z-10">
+      <header className="border-b border-white/5 bg-[var(--arena-bg)]/50 backdrop-blur-xl px-4 sm:px-6 py-4 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-5">
             <Link 
               href="/"
               className="text-gray-400 hover:text-white transition-colors mr-2"
@@ -849,21 +870,21 @@ export default function GamePage() {
             >
               ←
             </Link>
-            <h1 className="text-xl font-semibold text-white">Game #{gameId}</h1>
-            <span className={`px-2 py-1 text-xs font-medium ${
-              status === 'LIVE' ? 'bg-blue-500 text-white' :
-              status === 'REGISTRATION_OPEN' ? 'bg-[#fbbf24] text-black' :
-              status === 'READY_TO_START' ? 'bg-[#10b981] text-white' :
-              status === 'FINALIZED' ? 'bg-[#2a2a2a] text-[#9ca3af]' :
-              'bg-red-500 text-white'
+            <h1 className="text-lg font-semibold text-white tracking-wide [font-family:var(--font-orbitron)] mr-6">Game #{gameId}</h1>
+            <span className={`game-status-badge ${
+              status === 'LIVE' ? '!bg-[var(--neon-blue)]/30 !border-[var(--neon-blue)]/50 text-[var(--neon-cyan)]' :
+              status === 'REGISTRATION_OPEN' ? '!bg-[var(--accent-yellow)]/20 !border-[var(--accent-yellow)]/50 text-[var(--accent-yellow)]' :
+              status === 'READY_TO_START' ? '!bg-[var(--accent-green)]/20 !border-[var(--accent-green)]/50 text-[var(--accent-green)]' :
+              status === 'FINALIZED' ? '!bg-white/10 !border-white/20 text-white/80' :
+              '!bg-[var(--neon-pink)]/20 !border-[var(--neon-pink)]/50 text-[var(--neon-pink)]'
             }`}>
               {statusLabels[status || ''] || status}
             </span>
           </div>
           {registrationCountdown && !hasStarted && !isFinished && (
             <div className="flex items-center gap-2">
-              <span className="text-gray-500 text-sm">Registration Closes:</span>
-              <span className="text-purple-400 font-semibold">{registrationCountdown}</span>
+              <span className="text-gray-400 text-sm">Registration Closes:</span>
+              <span className="text-[var(--neon-cyan)] font-semibold">{registrationCountdown}</span>
             </div>
           )}
         </div>
@@ -871,13 +892,14 @@ export default function GamePage() {
 
       <main className="px-6 py-6">
         {!hasStarted && !isFinished ? (
-          <div className="flex gap-6">
-            <div className="flex-1">
+          <div className="flex items-start">
+            <div className="flex-1 min-w-0 mr-10">
               <GameBoard gameId={gameId} players={players} />
             </div>
-            <Sidebar
-              gameId={gameId}
-              currentRound={0}
+            <div className="shrink-0 ml-10">
+              <Sidebar
+                gameId={gameId}
+                currentRound={0}
               totalRounds={Number(game.totalRounds)}
               roundDuration={Number(game.roundDuration)}
               timeRemaining={0}
@@ -896,17 +918,19 @@ export default function GamePage() {
                 refetchPlayer();
                 refetchGame();
               }}
-            />
+              />
+            </div>
           </div>
         ) : hasStarted && !isFinished ? (
           <>
-            <div className="flex gap-6">
-              <div className="flex-1">
+            <div className="flex items-start">
+              <div className="flex-1 min-w-0 mr-10">
                 <GameBoard gameId={gameId} players={players} />
               </div>
-              <Sidebar
-                gameId={gameId}
-                currentRound={Number(game.currentRound)}
+              <div className="shrink-0 ml-10">
+                <Sidebar
+                  gameId={gameId}
+                  currentRound={Number(game.currentRound)}
                 totalRounds={Number(game.totalRounds)}
                 roundDuration={Number(game.roundDuration)}
                 timeRemaining={timeRemaining}
@@ -925,10 +949,11 @@ export default function GamePage() {
                 }}
               />
             </div>
-            
+          </div>
+
             {/* Round Snapshots Section - Detached below game board */}
             {hasStarted && (
-                <div className="mt-6 bg-[#1a1a1a] border border-purple-500/30 rounded-2xl p-6">
+                <div className="arena-panel mt-6 rounded-lg p-6">
                   <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                     <span>📸</span>
                     <span>Round Snapshots</span>
@@ -950,11 +975,11 @@ export default function GamePage() {
                       )}
                     </div>
                   ) : (
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto rounded-lg overflow-hidden">
                       <table className="w-full border-collapse">
                         <thead>
-                          <tr className="border-b border-gray-700">
-                            <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                          <tr className="border-b border-white/10">
+                            <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 z-10 bg-black/40">
                               Players
                             </th>
                             {Array.from({ length: 10 }, (_, i) => i + 1).map((roundNum) => (
@@ -986,11 +1011,11 @@ export default function GamePage() {
                               return (
                                 <tr
                                   key={playerAddress}
-                                  className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${
+                                  className={`border-b border-white/5 hover:bg-white/5 ${
                                     wasEliminated ? 'opacity-60' : ''
                                   }`}
                                 >
-                                  <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                                  <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 z-10 bg-black/40">
                                     <div className="flex items-center gap-2">
                                       <span className="truncate max-w-[200px]">
                                         {playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}
@@ -1052,7 +1077,7 @@ export default function GamePage() {
                                             ? isEliminationRound
                                               ? 'text-red-300 bg-red-500/5 border-l border-red-500/20'
                                               : 'text-green-300 bg-green-500/5 border-l border-green-500/20'
-                                            : 'text-gray-600 border-l border-gray-700/30'
+                                            : 'text-gray-500 border-l border-white/10'
                                         }`}
                                       >
                                         {hasEnd && endETH !== undefined ? (
@@ -1073,9 +1098,9 @@ export default function GamePage() {
                             gamePlayers ? Array.from(gamePlayers as Address[]).map((playerAddress): React.ReactElement => (
                               <tr
                                 key={playerAddress}
-                                className="border-b border-gray-800/50 hover:bg-gray-800/20"
-                              >
-                                <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                                className="border-b border-white/5 hover:bg-white/5"
+                                >
+                                <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 z-10 bg-black/40">
                                   <span className="truncate max-w-[200px]">
                                     {playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}
                                   </span>
@@ -1089,7 +1114,7 @@ export default function GamePage() {
                                   </td>,
                                   <td
                                     key={`${playerAddress}-${roundNum}-end`}
-                                    className="py-3 px-3 text-center text-xs text-gray-600 border-l border-gray-700/30 whitespace-nowrap min-w-[120px]"
+                                    className="py-3 px-3 text-center text-xs text-gray-500 border-l border-white/10 whitespace-nowrap min-w-[120px]"
                                   >
                                     <span>—</span>
                                   </td>
@@ -1115,136 +1140,113 @@ export default function GamePage() {
             {!game.cancelled && (
               <>
                 {loadingWinnerData && (
-                  <div className="bg-[#1a1a1a] border border-gray-700 p-6 rounded-2xl mb-6">
+                  <div className="rounded-2xl border border-[var(--neon-blue)]/30 bg-[var(--arena-charcoal)]/55 backdrop-blur-sm p-6 mb-6">
                     <div className="text-white">Loading game results...</div>
                   </div>
                 )}
                 
                 {winnerDataError && !loadingWinnerData && (
-                  <div className="bg-[#1a1a1a] border border-red-500/50 p-6 rounded-2xl mb-6">
+                  <div className="rounded-2xl border border-red-500/50 bg-red-500/10 p-6 mb-6">
                     <div className="text-red-400">Error: {winnerDataError}</div>
                   </div>
                 )}
                 
-                {winners.length > 0 && (
-                  <div className="space-y-6 mb-6">
-                    {/* 1st place: full card with gold gradient */}
-                    {winners[0] && (
-                      <div className="flex flex-wrap items-stretch gap-4">
-                        <div className="flex-1 min-w-[280px] bg-gradient-to-br from-[#1a1a1a] to-amber-950/30 border-2 border-[#fbbf24] p-6 rounded-2xl shadow-lg shadow-amber-500/10">
-                          <div className="text-xs text-amber-400/90 mb-1">🥇 1st Place</div>
-                          <div className="text-xl font-semibold text-amber-200 font-mono break-all mb-2">
-                            {winners[0].address}
-                          </div>
-                          <div className="flex justify-between items-center pt-3 border-t border-amber-500/30">
-                            <span className="text-sm text-amber-200/80">Prize</span>
-                            <span className="text-xl font-bold text-[#fbbf24]">{formatEther(winners[0].prize)} ETH</span>
-                          </div>
-                          <div className="flex justify-between items-center pt-2">
-                            <span className="text-sm text-amber-200/80">Final Gain</span>
-                            <span className={`text-lg font-semibold ${(winners[0].gainPercent ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                              {winners[0].gainPercent !== null ? `${winners[0].gainPercent >= 0 ? '+' : ''}${winners[0].gainPercent.toFixed(2)}%` : 'N/A'}
-                            </span>
-                          </div>
-                          {finalizationTxHash && (
-                            <a
-                              href={`https://sepolia.basescan.org/tx/${finalizationTxHash}#internaltx`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-amber-400 hover:text-amber-300 hover:underline mt-3 block"
-                            >
-                              View prize payout tx →
-                            </a>
-                          )}
-                        </div>
-                        <div className="bg-[#1a1a1a] border border-[#fbbf24] p-6 rounded-2xl min-w-[200px]">
-                          <div className="text-xs text-[#9ca3af] mb-1">Prize Pool (Paid Out)</div>
-                          <div className="text-2xl font-semibold text-[#10b981]">
-                            {prizeAmount > 0n ? formatEther(prizeAmount) : formatEther(game.prizePool || 0n)} ETH
-                          </div>
-                          <div className="text-xs text-gray-500 mt-2">60% / 30% / 10% to Top 3</div>
-                          {prizeAmount === 0n && game.prizePool === 0n && (
-                            <div className="text-xs text-yellow-400 mt-2">
-                              Calculated: {formatEther((game.entryFee * game.playerCount * 70n) / 100n)} ETH
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {/* 2nd and 3rd: side-by-side smaller cards */}
-                    {(winners[1] || winners[2]) && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {winners[1] && (
-                          <div className="bg-[#1a1a1a] border border-gray-400/50 p-4 rounded-xl">
-                            <div className="text-xs text-gray-400 mb-1">🥈 2nd Place</div>
-                            <div className="text-sm font-mono text-gray-300 truncate mb-2" title={winners[1].address}>
-                              {winners[1].address.slice(0, 6)}...{winners[1].address.slice(-4)}
-                            </div>
-                            <div className="flex justify-between text-sm">
-                              <span className="text-gray-500">Prize</span>
-                              <span className="font-semibold text-[#10b981]">{formatEther(winners[1].prize)} ETH</span>
-                            </div>
-                            <div className="flex justify-between text-sm mt-1">
-                              <span className="text-gray-500">Gain</span>
-                              <span className={winners[1].gainPercent !== null && winners[1].gainPercent >= 0 ? 'text-green-400' : 'text-red-400'}>
-                                {winners[1].gainPercent !== null ? `${winners[1].gainPercent >= 0 ? '+' : ''}${winners[1].gainPercent.toFixed(2)}%` : 'N/A'}
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                        {winners[2] && (
-                          <div className="bg-[#1a1a1a] border border-amber-700/50 p-4 rounded-xl">
-                            <div className="text-xs text-amber-600/90 mb-1">🥉 3rd Place</div>
-                            <div className="text-sm font-mono text-gray-300 truncate mb-2" title={winners[2].address}>
-                              {winners[2].address.slice(0, 6)}...{winners[2].address.slice(-4)}
-                            </div>
-                            <div className="flex justify-between text-sm">
-                              <span className="text-gray-500">Prize</span>
-                              <span className="font-semibold text-[#10b981]">{formatEther(winners[2].prize)} ETH</span>
-                            </div>
-                            <div className="flex justify-between text-sm mt-1">
-                              <span className="text-gray-500">Gain</span>
-                              <span className={winners[2].gainPercent !== null && winners[2].gainPercent >= 0 ? 'text-green-400' : 'text-red-400'}>
-                                {winners[2].gainPercent !== null ? `${winners[2].gainPercent >= 0 ? '+' : ''}${winners[2].gainPercent.toFixed(2)}%` : 'N/A'}
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {winners.length === 0 && !loadingWinnerData && gamePlayers && (gamePlayers as Address[]).length > 0 && (
-                  <div className="bg-[#1a1a1a] border border-yellow-500/50 p-6 rounded-2xl mb-6">
+                  <div className="rounded-2xl border border-[var(--accent-yellow)]/50 bg-[var(--arena-charcoal)]/55 backdrop-blur-sm p-6 mb-6">
                     <div className="text-yellow-400">No winners found. All players may have been eliminated.</div>
                   </div>
                 )}
 
-                {losers.length > 0 && (
-                  <div className="bg-[#1a1a1a] border border-gray-700 p-6 rounded-2xl mb-6">
-                    <div className="text-xs text-[#9ca3af] mb-4">Eliminated Players ({losers.length})</div>
-                    <div className="space-y-3 max-h-96 overflow-y-auto">
-                      {losers.map((loser, index) => (
-                        <div key={loser.address} className="flex justify-between items-center py-2 border-b border-gray-800 last:border-b-0">
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium text-gray-300 font-mono truncate">
-                              {loser.address}
-                            </div>
-                            <div className="text-xs text-gray-500">#{index + 1} eliminated</div>
-                          </div>
-                          <div className={`text-lg font-semibold ml-4 ${loser.gainPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                            {loser.gainPercent >= 0 ? '+' : ''}{loser.gainPercent.toFixed(2)}%
-                          </div>
-                        </div>
-                      ))}
+                {/* Placements table: 1st (winner) then 2nd, 3rd, 4th... from losers (losers sorted best-first) */}
+                {(winners.length > 0 || losers.length > 0) && (
+                  <div className="rounded-2xl border border-[var(--neon-blue)]/25 bg-[var(--arena-charcoal)]/55 backdrop-blur-sm p-6 mb-6">
+                    <div className="flex flex-wrap items-baseline justify-between gap-3">
+                      <div className="text-sm font-semibold text-white/90">Placements</div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                        <span className="text-white/70">
+                          Prize pool (paid out): <span className="text-[#10b981] font-semibold tabular-nums">
+                            {prizeAmount > 0n ? formatEther(prizeAmount) : formatEther(game.prizePool || 0n)} ETH
+                          </span>
+                          {prizeAmount === 0n && game.prizePool === 0n && game.entryFee && game.playerCount && (
+                            <span className="text-white/50"> (calc. {formatEther((game.entryFee * game.playerCount * 70n) / 100n)} ETH)</span>
+                          )}
+                          <span className="text-white/50 ml-1">· 60% / 30% / 10% to Top 3</span>
+                        </span>
+                      </div>
+                    </div>
+                    {/* Explicit empty row of space between header and table */}
+                    <div className="min-h-[3rem] shrink-0" aria-hidden="true" />
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse">
+                        <thead>
+                          <tr className="border-b border-white/10 text-left">
+                            <th className="py-2 pr-4 text-xs text-white/60 font-medium">Place</th>
+                            <th className="py-2 pr-4 text-xs text-white/60 font-medium">Wallet</th>
+                            <th className="py-2 text-xs text-white/60 font-medium text-right">Prize</th>
+                            <th className="py-2 pl-4 text-xs text-white/60 font-medium text-right">Gain</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {winners[0] && (
+                            <tr className="border-b border-gray-800/80 hover:bg-white/5">
+                              <td className="py-3 pr-4 text-amber-400/90 font-medium">1st</td>
+                              <td className="py-3 pr-4 font-mono text-sm text-gray-300 truncate max-w-[200px]" title={winners[0].address}>{winners[0].address}</td>
+                              <td className="py-3 text-sm text-[#fbbf24] tabular-nums text-right">{formatEther(prize1st || winners[0].prize)} ETH</td>
+                              <td className={`py-3 pl-4 font-semibold text-right ${(winners[0].gainPercent ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {winners[0].gainPercent != null ? `${winners[0].gainPercent >= 0 ? '+' : ''}${Number(winners[0].gainPercent).toFixed(2)}%` : 'N/A'}
+                              </td>
+                            </tr>
+                          )}
+                          {losers.map((loser, index) => {
+                            const place = 2 + index;
+                            const placeLabel = place === 2 ? '2nd' : place === 3 ? '3rd' : `${place}th`;
+                            const prizeEth = place === 2 ? prize2nd : place === 3 ? prize3rd : 0n;
+                            return (
+                              <tr key={loser.address} className="border-b border-gray-800/80 hover:bg-white/5">
+                                <td className="py-3 pr-4 text-white/80 font-medium">{placeLabel}</td>
+                                <td className="py-3 pr-4 font-mono text-sm text-gray-300 truncate max-w-[200px]" title={loser.address}>{loser.address}</td>
+                                <td className="py-3 text-sm text-right">
+                                  {prizeEth > 0n ? <span className="text-[#10b981] tabular-nums">{formatEther(prizeEth)} ETH</span> : '—'}
+                                </td>
+                                <td className={`py-3 pl-4 font-semibold text-right ${loser.gainPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                  {loser.gainPercent >= 0 ? '+' : ''}{Number(loser.gainPercent).toFixed(2)}%
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-6 pt-6 border-t border-white/10 px-2 py-4">
+                      {finalizationTxHash ? (
+                        <>
+                          <a
+                            href={`https://sepolia-explorer.base.org/tx/${finalizationTxHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-[var(--neon-blue)] hover:underline"
+                          >
+                            View finalize transaction →
+                          </a>
+                          <p className="text-xs text-white/50 mt-1.5">Prize payouts appear as internal transfers in the transaction.</p>
+                        </>
+                      ) : (
+                        <a
+                          href={`https://sepolia-explorer.base.org/address/${CONTRACT_ADDRESS}#events`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-[var(--neon-blue)] hover:underline"
+                        >
+                          View contract (events / transactions) on explorer →
+                        </a>
+                      )}
                     </div>
                   </div>
                 )}
 
                 {/* Round Snapshots (Start / End ETH per round) - at bottom of finished game data */}
                 {!game.cancelled && (
-                  <div className="mt-6 w-full max-w-6xl mx-auto bg-[#1a1a1a] border border-purple-500/30 rounded-2xl p-6 mb-6">
+                  <div className="arena-panel mt-6 w-full max-w-6xl mx-auto rounded-lg p-6 mb-6">
                     <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                       <span>📸</span>
                       <span>Round Snapshots</span>
@@ -1259,11 +1261,11 @@ export default function GamePage() {
                     ) : snapshots.size === 0 && roundEndSnapshots.size === 0 ? (
                       <div className="text-gray-400 text-sm">No snapshot data available for this game.</div>
                     ) : (
-                      <div className="overflow-x-auto">
+                      <div className="overflow-x-auto rounded-lg overflow-hidden">
                         <table className="w-full border-collapse">
                           <thead>
-                            <tr className="border-b border-gray-700">
-                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">Players</th>
+                            <tr className="border-b border-white/10">
+                              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 z-10 bg-black/40">Players</th>
                               {Array.from({ length: 10 }, (_, i) => i + 1).map((roundNum) => (
                                 <th key={roundNum} colSpan={2} className="text-center py-3 px-2 text-xs font-semibold text-gray-400">
                                   <div className="flex flex-col gap-1">
@@ -1288,9 +1290,9 @@ export default function GamePage() {
                                 return (
                                   <tr
                                     key={playerAddress}
-                                    className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${wasEliminated ? 'opacity-60' : ''} ${winnerEntry ? (winnerEntry.place === 1 ? 'ring-1 ring-[#fbbf24]/50' : winnerEntry.place === 2 ? 'ring-1 ring-gray-400/40' : 'ring-1 ring-amber-600/40') : ''}`}
+                                    className={`border-b border-white/5 hover:bg-white/5 ${wasEliminated ? 'opacity-60' : ''} ${winnerEntry ? (winnerEntry.place === 1 ? 'ring-1 ring-[#fbbf24]/50' : winnerEntry.place === 2 ? 'ring-1 ring-gray-400/40' : 'ring-1 ring-amber-600/40') : ''}`}
                                   >
-                                    <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10">
+                                    <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 z-10 bg-black/40">
                                       <div className="flex items-center gap-2">
                                         <span className="truncate max-w-[200px]">{playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}</span>
                                         {placeLabel && <span className={`text-xs font-semibold whitespace-nowrap ${winnerEntry!.place === 1 ? 'text-[#fbbf24]' : winnerEntry!.place === 2 ? 'text-gray-400' : 'text-amber-600'}`}>{placeLabel}</span>}
@@ -1312,15 +1314,15 @@ export default function GamePage() {
                                       return [
                                         <td
                                           key={`${playerAddress}-${roundNum}-start`}
-                                          className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${hasStart ? (isEliminationRound ? 'text-red-300 bg-red-500/5' : 'text-purple-300 bg-purple-500/5') : 'text-gray-600'}`}
+                                          className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${hasStart ? (isEliminationRound ? 'text-red-300 bg-red-500/5' : 'text-purple-300 bg-purple-500/5') : 'text-gray-500'}`}
                                         >
-                                          {hasStart && displayStartETH !== undefined ? <span className="font-semibold block" title={formatEther(displayStartETH) + ' ETH' + (startFromPrevEnd ? ' (from Round ' + (roundNum - 1) + ' End)' : '')}>{Number(formatEther(displayStartETH)).toFixed(6)} ETH</span> : <span className="text-gray-600">—</span>}
+                                          {hasStart && displayStartETH !== undefined ? <span className="font-semibold block" title={formatEther(displayStartETH) + ' ETH' + (startFromPrevEnd ? ' (from Round ' + (roundNum - 1) + ' End)' : '')}>{Number(formatEther(displayStartETH)).toFixed(6)} ETH</span> : <span className="text-gray-500">—</span>}
                                         </td>,
                                         <td
                                           key={`${playerAddress}-${roundNum}-end`}
-                                          className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${hasEnd ? (isEliminationRound ? 'text-red-300 bg-red-500/5 border-l border-red-500/20' : 'text-green-300 bg-green-500/5 border-l border-green-500/20') : 'text-gray-600 border-l border-gray-700/30'}`}
+                                          className={`py-3 px-3 text-center text-xs font-mono whitespace-nowrap min-w-[120px] ${hasEnd ? (isEliminationRound ? 'text-red-300 bg-red-500/5 border-l border-red-500/20' : 'text-green-300 bg-green-500/5 border-l border-green-500/20') : 'text-gray-500 border-l border-white/10'}`}
                                         >
-                                          {hasEnd && endETH !== undefined ? <span className="font-semibold block" title={formatEther(endETH) + ' ETH'}>{Number(formatEther(endETH)).toFixed(6)} ETH</span> : <span className="text-gray-600">—</span>}
+                                          {hasEnd && endETH !== undefined ? <span className="font-semibold block" title={formatEther(endETH) + ' ETH'}>{Number(formatEther(endETH)).toFixed(6)} ETH</span> : <span className="text-gray-500">—</span>}
                                         </td>,
                                       ];
                                     })}
@@ -1329,11 +1331,11 @@ export default function GamePage() {
                               })
                             ) : (
                               gamePlayers ? Array.from(gamePlayers as Address[]).map((playerAddress): React.ReactElement => (
-                                <tr key={playerAddress} className="border-b border-gray-800/50">
-                                  <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 bg-[#1a1a1a] z-10"><span className="truncate max-w-[200px]">{playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}</span></td>
+                                <tr key={playerAddress} className="border-b border-white/5">
+                                  <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 z-10 bg-black/40"><span className="truncate max-w-[200px]">{playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}</span></td>
                                   {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => [
-                                    <td key={`${playerAddress}-${roundNum}-start`} className="py-3 px-3 text-center text-xs text-gray-600 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
-                                    <td key={`${playerAddress}-${roundNum}-end`} className="py-3 px-3 text-center text-xs text-gray-600 border-l border-gray-700/30 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
+                                    <td key={`${playerAddress}-${roundNum}-start`} className="py-3 px-3 text-center text-xs text-gray-500 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
+                                    <td key={`${playerAddress}-${roundNum}-end`} className="py-3 px-3 text-center text-xs text-gray-500 border-l border-white/10 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
                                   ])}
                                 </tr>
                               )) : null
@@ -1350,7 +1352,7 @@ export default function GamePage() {
               </>
             )}
             {game.cancelled && (
-              <div className="bg-[#1a1a1a] border border-red-500/50 p-4 inline-block">
+              <div className="rounded-xl border border-red-500/50 bg-red-500/10 p-4 inline-block">
                 <div className="text-xs text-[#9ca3af] mb-1">Refunded Amount</div>
                 <div className="text-2xl font-semibold text-red-400">
                   {formatEther((game.entryFee * game.playerCount) || 0n)} ETH
@@ -1360,6 +1362,7 @@ export default function GamePage() {
           </div>
         )}
       </main>
+      </div>
     </div>
   );
 }

@@ -71,7 +71,7 @@ export default function StartGameButton({
       <button
         onClick={handleStart}
         disabled={isPending || isConfirming || isSuccess}
-        className="w-full px-4 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold animate-pulse-slow"
+        className="w-full px-4 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold text-white animate-pulse-slow"
       >
         {isPending || isConfirming
           ? 'Starting Game...'
@@ -91,12 +91,12 @@ export default function StartGameButton({
         </p>
       )}
       {timeRemaining <= 0 && reward > 0n && (
-        <p className="text-xs text-center text-gray-400">
+        <p className="text-xs text-center text-white/85">
           Reward expired, but you can still start the game
         </p>
       )}
       {hash && (
-        <p className="text-xs text-gray-400 text-center">
+        <p className="text-xs text-white/80 text-center">
           {hash.slice(0, 10)}...{hash.slice(-8)}
         </p>
       )}

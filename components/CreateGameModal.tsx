@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { parseEther, formatEther } from 'viem';
 import { useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi';
 import { CONTRACT_ADDRESS, contractABI } from '@/lib/contract';
@@ -20,6 +20,40 @@ export default function CreateGameModal({ onClose, onSuccess }: CreateGameModalP
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
+
+  /* Draggable modal: offset in pixels from initial placement */
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef({ startX: 0, startY: 0, offsetX: 0, offsetY: 0 });
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      offsetX: dragOffset.x,
+      offsetY: dragOffset.y,
+    };
+    setIsDragging(true);
+  }, [dragOffset.x, dragOffset.y]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onMove = (e: MouseEvent) => {
+      const { startX, startY, offsetX, offsetY } = dragStartRef.current;
+      setDragOffset({
+        x: offsetX + (e.clientX - startX),
+        y: offsetY + (e.clientY - startY),
+      });
+    };
+    const onUp = () => setIsDragging(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [isDragging]);
 
   // Use wagmi's writeContract for better control
   const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
@@ -206,26 +240,14 @@ export default function CreateGameModal({ onClose, onSuccess }: CreateGameModalP
             transition: 'opacity 0.3s ease-out'
           }}
         >
-          <div 
-            className="px-6 py-4 shadow-lg border font-sans text-white"
-            style={{
-              backgroundColor: '#991b1b', // red-800 solid
-              borderColor: '#ef4444', // red-500
-              borderWidth: '1px',
-              borderRadius: '1.5rem', // rounded-2xl
-              minWidth: '250px',
-              maxWidth: '500px'
-            }}
-          >
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-medium">{toast.message}</span>
-            </div>
+          <div className="px-6 py-4 rounded-2xl border border-[var(--neon-pink)]/40 bg-[var(--arena-charcoal)]/80 backdrop-blur-sm text-white shadow-[0_0_24px_rgba(255,45,149,0.15)] min-w-[250px] max-w-[500px]">
+            <span className="text-sm font-medium">{toast.message}</span>
           </div>
         </div>
       )}
 
       <div 
-        className="fixed inset-0 bg-gray-950/50 backdrop-blur-sm z-50"
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xl"
         onClick={(e) => {
           if (e.target === e.currentTarget && !isProcessing) {
             onClose();
@@ -233,227 +255,158 @@ export default function CreateGameModal({ onClose, onSuccess }: CreateGameModalP
         }}
       >
       <div 
-        className="create-game-modal bg-transparent backdrop-blur-xl border border-gray-700 fixed top-24 right-8 z-[60] max-h-[85vh] overflow-y-auto"
+        className="create-game-modal create-game-modal-panel fixed top-20 left-1/2 z-[60] w-[28rem] max-w-[calc(100vw-4rem)] backdrop-blur-md pt-8 shadow-[0_0_40px_rgba(0,212,255,0.12)] -translate-x-1/2 flex flex-col"
+        style={{ transform: `translate(calc(-50% + ${dragOffset.x}px), ${dragOffset.y}px)` }}
         onClick={(e) => e.stopPropagation()}
-        style={{ 
-          backgroundColor: 'rgba(31, 41, 55, 0.8)', 
-          backdropFilter: 'blur(24px)', 
-          WebkitBackdropFilter: 'blur(24px)',
-          position: 'fixed',
-          top: '6rem',
-          right: '2rem',
-          width: '420px',
-          maxWidth: 'calc(100vw - 4rem)',
-          borderRadius: '2rem',
-          padding: '2rem'
-        }}
       >
-        <div className="flex justify-between items-center mb-8">
-          <h2 className="text-2xl font-bold text-white font-sans">Create New Game</h2>
+        <div
+          className={`flex justify-between items-center mb-5 flex-shrink-0 max-w-[22rem] ${isDragging ? 'cursor-grabbing' : 'cursor-grab'} select-none`}
+          onMouseDown={handleDragStart}
+          title="Drag to move"
+        >
+          <h2 className="text-xl font-bold text-white">Create New Game</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors disabled:opacity-50 w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-700/50"
+            className="text-white/70 hover:text-white transition-colors disabled:opacity-50 w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 flex-shrink-0"
             disabled={isProcessing}
           >
             ✕
           </button>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <div className="space-y-2">
-            <label className="block w-3/4 text-sm font-semibold text-purple-400 mb-6 font-sans" style={{ boxSizing: 'border-box' }}>
-              Total Rounds
-            </label>
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col gap-4 create-game-modal-form max-w-[22rem]">
+          <div className="space-y-1.5">
+            <label className="block text-sm font-semibold text-[var(--neon-cyan)]/90">Total Rounds</label>
             <input
               type="number"
               value={totalRounds}
               onChange={(e) => setTotalRounds(e.target.value)}
-              className="w-3/4 bg-gray-800 border border-gray-700 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:shadow-md focus:shadow-purple-500/50 transition-all disabled:opacity-50 font-sans"
-              style={{ 
-                borderRadius: '1.5rem', 
-                padding: '0.9375rem 1.75rem',
-                boxSizing: 'border-box',
-                width: '75%'
-              }}
-              placeholder="Enter total rounds"
+              className="create-game-modal-input w-full max-w-[22rem] rounded-lg border border-[var(--neon-blue)]/25 bg-black/30 px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[var(--neon-blue)]/50 focus:border-[var(--neon-blue)]/50 transition-all disabled:opacity-50"
+              placeholder="e.g. 10"
               min="1"
               disabled={isProcessing}
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="block w-3/4 text-sm font-semibold text-purple-400 mb-6 font-sans" style={{ boxSizing: 'border-box' }}>
-              Round Duration (seconds)
-            </label>
+          <div className="space-y-1.5">
+            <label className="block text-sm font-semibold text-[var(--neon-cyan)]/90">Round Duration (seconds)</label>
             <input
               type="number"
               value={roundDuration}
               onChange={(e) => setRoundDuration(e.target.value)}
-              className="w-3/4 bg-gray-800 border border-gray-700 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:shadow-md focus:shadow-purple-500/50 transition-all disabled:opacity-50 font-sans"
-              style={{ 
-                borderRadius: '1.5rem', 
-                padding: '0.9375rem 1.75rem',
-                boxSizing: 'border-box',
-                width: '75%'
-              }}
-              placeholder="Enter duration in seconds"
+              className="create-game-modal-input w-full max-w-[22rem] rounded-lg border border-[var(--neon-blue)]/25 bg-black/30 px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[var(--neon-blue)]/50 focus:border-[var(--neon-blue)]/50 transition-all disabled:opacity-50"
+              placeholder="e.g. 3600"
               min="60"
               disabled={isProcessing}
             />
-            <p className="w-3/4 text-xs text-gray-500 -mt-2 font-sans" style={{ paddingLeft: '1.75rem', lineHeight: '1.2', marginTop: '0', marginBottom: '0' }}>
-              Example: 3600 = 1 hour, 86400 = 24 hours
-            </p>
+            <p className="text-xs text-white/70">Example: 3600 = 1 hour, 86400 = 24 hours</p>
           </div>
 
-          <div className="space-y-2">
-            <label className="block w-3/4 text-sm font-semibold text-purple-400 mb-6 font-sans" style={{ boxSizing: 'border-box' }}>
-              Entry Fee (ETH)
-            </label>
+          <div className="space-y-1.5">
+            <label className="block text-sm font-semibold text-[var(--neon-cyan)]/90">Entry Fee (ETH)</label>
             <input
               type="number"
               value={entryFee}
               onChange={(e) => setEntryFee(e.target.value)}
-              className="w-3/4 bg-gray-800 border border-gray-700 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:shadow-md focus:shadow-purple-500/50 transition-all disabled:opacity-50 font-sans"
-              style={{ 
-                borderRadius: '1.5rem', 
-                padding: '0.9375rem 1.75rem',
-                boxSizing: 'border-box',
-                width: '75%'
-              }}
+              className="create-game-modal-input w-full max-w-[22rem] rounded-lg border border-[var(--neon-blue)]/25 bg-black/30 px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[var(--neon-blue)]/50 focus:border-[var(--neon-blue)]/50 transition-all disabled:opacity-50"
               placeholder="0.001"
               step="0.0001"
               min="0.00015"
               max="0.002"
               disabled={isProcessing}
             />
-            <div className="w-3/4 -mt-2" style={{ paddingLeft: '1.75rem' }}>
+            <div className="space-y-0.5">
               {minimumRequiredFee ? (
                 <>
-                  <p className="text-xs text-gray-500 font-sans" style={{ lineHeight: '1.2', marginTop: '0', marginBottom: '0' }}>
-                    Maximum: 0.002 ETH
-                  </p>
-                  <p className="text-sm text-purple-400 font-semibold font-sans -mt-0.5" style={{ lineHeight: '1.2', marginTop: '0.25rem', marginBottom: '0' }}>
-                    Minimum required: {formatEther(minimumRequiredFee)} ETH
-                  </p>
-                  {feeExplanation && (
-                    <p className="text-xs text-cyan-400 font-sans -mt-0.5" style={{ lineHeight: '1.2', marginTop: '0.25rem', marginBottom: '0' }}>
-                      {feeExplanation}
-                    </p>
-                  )}
+                  <p className="text-xs text-white/70">Maximum: 0.002 ETH</p>
+                  <p className="text-sm font-semibold text-[var(--neon-cyan)]">Minimum required: {formatEther(minimumRequiredFee)} ETH</p>
+                  {feeExplanation && <p className="text-xs text-[var(--neon-cyan)]/80">{feeExplanation}</p>}
                 </>
               ) : isLoadingEntryFee ? (
-                <p className="text-xs text-gray-500 font-sans" style={{ lineHeight: '1.2', marginTop: '0', marginBottom: '0' }}>
-                  Loading minimum fee requirement...
-                </p>
+                <p className="text-xs text-white/70">Loading minimum fee requirement...</p>
               ) : (
                 <>
-                  <p className="text-xs text-gray-500 font-sans" style={{ lineHeight: '1.2', marginTop: '0', marginBottom: '0' }}>
-                    Maximum: 0.002 ETH
-                  </p>
-                  <p className="text-sm text-yellow-400 font-semibold font-sans -mt-0.5" style={{ lineHeight: '1.2', marginTop: '0.25rem', marginBottom: '0' }}>
-                    Estimated minimum: {formatEther(fallbackMinimumFee)} ETH
-                  </p>
-                  <p className="text-xs text-gray-500 font-sans -mt-0.5" style={{ lineHeight: '1.2', marginTop: '0.25rem', marginBottom: '0' }}>
-                    (Unable to fetch from contract, using fallback)
-                  </p>
+                  <p className="text-xs text-white/70">Maximum: 0.002 ETH</p>
+                  <p className="text-sm font-semibold text-[var(--accent-yellow)]">Estimated minimum: {formatEther(fallbackMinimumFee)} ETH</p>
+                  <p className="text-xs text-white/70">(Unable to fetch from contract, using fallback)</p>
                 </>
               )}
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="block w-3/4 text-sm font-semibold text-purple-400 mb-6 font-sans" style={{ boxSizing: 'border-box' }}>
-              Registration Period (seconds)
-            </label>
+          <div className="space-y-1.5">
+            <label className="block text-sm font-semibold text-[var(--neon-cyan)]/90">Registration Period (seconds)</label>
             <input
               type="number"
               value={registrationPeriod}
               onChange={(e) => setRegistrationPeriod(e.target.value)}
-              className="w-3/4 bg-gray-800 border border-gray-700 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:shadow-md focus:shadow-purple-500/50 transition-all disabled:opacity-50 font-sans"
-              style={{ 
-                borderRadius: '1.5rem', 
-                padding: '0.9375rem 1.75rem',
-                boxSizing: 'border-box',
-                width: '75%'
-              }}
-              placeholder="Enter registration period"
+              className="create-game-modal-input w-full max-w-[22rem] rounded-lg border border-[var(--neon-blue)]/25 bg-black/30 px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[var(--neon-blue)]/50 focus:border-[var(--neon-blue)]/50 transition-all disabled:opacity-50"
+              placeholder="e.g. 86400"
               min="60"
               disabled={isProcessing}
             />
-            <p className="w-3/4 text-xs text-gray-500 -mt-2 font-sans" style={{ paddingLeft: '1.75rem', lineHeight: '1.2', marginTop: '0', marginBottom: '0' }}>
-              Example: 3600 = 1 hour, 86400 = 24 hours
-            </p>
+            <p className="text-xs text-white/70">Example: 3600 = 1 hour, 86400 = 24 hours</p>
           </div>
 
-          <div className="space-y-2">
-            <label className="block w-3/4 text-sm font-semibold text-purple-400 mb-6 font-sans" style={{ boxSizing: 'border-box' }}>
-              Minimum Players
-            </label>
+          <div className="space-y-1.5">
+            <label className="block text-sm font-semibold text-[var(--neon-cyan)]/90">Minimum Players</label>
             <input
               type="number"
               value={minPlayers}
               onChange={(e) => setMinPlayers(e.target.value)}
-              className="w-3/4 bg-gray-800 border border-gray-700 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:shadow-md focus:shadow-purple-500/50 transition-all disabled:opacity-50 font-sans"
-              style={{ 
-                borderRadius: '1.5rem', 
-                padding: '0.9375rem 1.75rem',
-                boxSizing: 'border-box',
-                width: '75%'
-              }}
-              placeholder="Enter minimum players"
+              className="create-game-modal-input w-full max-w-[22rem] rounded-lg border border-[var(--neon-blue)]/25 bg-black/30 px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[var(--neon-blue)]/50 focus:border-[var(--neon-blue)]/50 transition-all disabled:opacity-50"
+              placeholder="e.g. 10"
               min="2"
               max="100"
               disabled={isProcessing}
             />
-            <p className="w-3/4 text-xs text-gray-500 -mt-2 font-sans" style={{ paddingLeft: '1.75rem', lineHeight: '1.2', marginTop: '0', marginBottom: '0' }}>
-              Range: 2 - 100 players. Minimum entry fee will be calculated automatically.
-            </p>
+            <p className="text-xs text-white/70">Range: 2 - 100 players. Minimum entry fee will be calculated automatically.</p>
           </div>
-        </div>
 
         {error && (
-          <div className="mt-6 bg-gray-800/50 backdrop-blur-sm border border-red-500/50 p-4 text-red-400 text-sm font-sans relative" style={{ borderRadius: '1.5rem' }}>
+          <div className="mt-4 rounded-lg border border-red-500/50 bg-red-500/10 p-3 text-red-300 text-sm relative">
             <button
               onClick={() => setError(null)}
-              className="absolute top-2 right-2 text-red-400 hover:text-red-300 transition-colors"
+              className="absolute top-3 right-3 text-red-400 hover:text-red-300 transition-colors"
               aria-label="Dismiss error"
             >
               ✕
             </button>
-            <div className="pr-6">{error}</div>
+            <div className="pr-8">{error}</div>
           </div>
         )}
 
         {(isPending || isConfirming) && (
-          <div className="mt-6 bg-gray-800/50 backdrop-blur-sm border border-gray-700 p-4 text-sm text-gray-400 font-sans" style={{ borderRadius: '1.5rem' }}>
+          <div className="mt-4 rounded-lg border border-[var(--neon-blue)]/30 bg-black/30 p-3 text-sm text-white/80">
             {isPending ? 'Waiting for wallet...' : 'Confirming transaction...'}
             {hash && (
               <a 
                 href={`https://sepolia.basescan.org/tx/${hash}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-purple-400 hover:text-purple-300 hover:underline mt-2 block text-xs"
+                className="text-[var(--neon-cyan)] hover:underline mt-2 block text-xs"
               >
                 View on Basescan →
               </a>
             )}
           </div>
         )}
+        </div>
 
-        <div className="space-y-3" style={{ marginTop: '10px' }}>
+        <div className="flex-shrink-0 mt-6 pt-6 pb-8 space-y-3 max-w-[22rem]">
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={isProcessing}
-            className="w-3/4 px-6 bg-gradient-to-r from-purple-600 to-cyan-500 text-white font-bold hover:from-purple-500 hover:to-cyan-400 transition-all shadow-lg shadow-purple-500/50 disabled:opacity-50 disabled:cursor-not-allowed font-sans"
-            style={{ borderRadius: '1.5rem', paddingTop: '0.9375rem', paddingBottom: '0.9375rem' }}
+            className="create-game-modal-btn create-game-modal-btn-primary"
           >
             {isPending ? 'Waiting...' : isConfirming ? 'Confirming...' : 'Create Game'}
           </button>
           <button
+            type="button"
             onClick={onClose}
             disabled={isProcessing}
-            className="w-3/4 px-6 bg-gray-800 border border-gray-700 text-white hover:bg-gray-700 transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed font-sans"
-            style={{ borderRadius: '1.5rem', paddingTop: '0.9375rem', paddingBottom: '0.9375rem' }}
+            className="create-game-modal-btn"
           >
             Cancel
           </button>

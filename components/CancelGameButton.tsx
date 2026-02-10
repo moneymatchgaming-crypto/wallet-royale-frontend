@@ -196,12 +196,12 @@ export default function CancelGameButton({
     const hours = Math.floor(timeRemaining / 3600);
     const minutes = Math.floor((timeRemaining % 3600) / 60);
     return (
-      <div className="flex flex-col items-center p-4 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl shadow-lg">
+      <div className="flex flex-col items-center p-4 arena-panel rounded-lg">
         <h3 className="text-lg font-bold text-white mb-2">Cancel Game</h3>
-        <p className="text-sm text-gray-400 text-center">
+        <p className="text-sm text-white/90 text-center">
           Can be cancelled in {hours}h {minutes}m
         </p>
-        <p className="text-xs text-gray-500 text-center mt-1">
+        <p className="text-xs text-white/75 text-center mt-1">
           (After grace period ends)
         </p>
       </div>
@@ -209,24 +209,24 @@ export default function CancelGameButton({
   }
 
   return (
-    <div className="flex flex-col items-center p-4 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl shadow-lg relative">
+    <div className="flex flex-col items-center p-4 arena-panel rounded-lg relative">
       <h3 className="text-lg font-bold text-white mb-3">Cancel Game</h3>
       {loadingReward ? (
-        <p className="text-sm text-gray-400">Checking eligibility...</p>
+        <p className="text-sm text-white/90">Checking eligibility...</p>
       ) : cancelReward !== null && cancelReward > 0n ? (
-        <p className="text-sm text-green-400 mb-4">
+        <p className="text-sm text-[var(--accent-green)] mb-4">
           Reward: {formatEther(cancelReward)} ETH
         </p>
       ) : (
-        <p className="text-sm text-gray-400 mb-4">No reward available</p>
+        <p className="text-sm text-white/90 mb-4">No reward available</p>
       )}
 
       {!address ? (
-        <p className="text-sm text-yellow-400 text-center">
+        <p className="text-sm text-[var(--accent-yellow)] text-center">
           Connect wallet to cancel game
         </p>
       ) : !canCancel && !loadingReward ? (
-        <p className="text-sm text-gray-400 text-center">
+        <p className="text-sm text-white/85 text-center">
           Game cannot be cancelled at this time
         </p>
       ) : (

@@ -5,7 +5,16 @@ import { useReadContract, useAccount } from 'wagmi';
 import { contractABI, CONTRACT_ADDRESS } from '@/lib/contract';
 import GameCard from './GameCard';
 import CreateGameModal from './CreateGameModal';
+import FilterButton from './FilterButton';
 import { Address } from 'viem';
+
+function SwordsIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return (
+    <svg className={className} style={style} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+      <path d="M5 4l7 7-2 2 7 7M19 20l-7-7 2-2-7-7M4 5l2 2M20 19l-2-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
 
 type GameStatus = 'REGISTRATION_OPEN' | 'READY_TO_START' | 'LIVE' | 'FINALIZED' | 'CANCELLED';
 
@@ -111,20 +120,22 @@ export default function GameLobby() {
 
   return (
     <div className="space-y-8">
-      {/* Header Section */}
-      <div className="flex items-center justify-between">
+      {/* Header Section - sleek futuristic */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-2 font-sans">Join Games</h2>
-          <p className="text-gray-500 text-sm font-sans">Select a game to join or create a new one</p>
+          <h2 className="text-2xl sm:text-3xl font-bold text-white mb-1 font-sans tracking-tight">Join Games</h2>
+          <p className="text-[var(--text-muted)] text-sm font-sans">Select a game to join or create a new one</p>
         </div>
-            {mounted && isConnected && (
-              <button 
-                onClick={() => setShowCreateModal(true)}
-                className="px-6 py-3 bg-gradient-to-r from-purple-600 to-cyan-500 text-white hover:from-purple-500 hover:to-cyan-400 transition-all font-bold rounded-2xl shadow-lg shadow-purple-500/50 font-sans"
-              >
-                Create Game
-              </button>
-            )}
+        {mounted && isConnected && (
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="create-game-btn"
+          >
+            <SwordsIcon className="shrink-0" style={{ width: 10, height: 10, minWidth: 10, minHeight: 10 }} />
+            Create Game
+          </button>
+        )}
       </div>
 
       {/* Create Game Modal */}
@@ -153,67 +164,24 @@ export default function GameLobby() {
         />
       )}
 
-      {/* Filter Tabs - Split Layout */}
-      <div className="flex items-center justify-between pb-4">
-        {/* Primary Filters (Left) */}
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-500 mr-2 font-sans">Active:</span>
-          <button
-            onClick={() => setFilter('open')}
-            className={`px-5 py-2.5 text-sm font-semibold rounded-2xl transition-all font-sans ${
-              filter === 'open'
-                ? 'bg-gradient-to-r from-purple-600 to-cyan-500 text-white shadow-lg shadow-purple-500/50'
-                : 'bg-gray-800 border border-gray-700 text-gray-400 hover:text-white hover:border-purple-500/50'
-            }`}
-          >
-            Open
-          </button>
-          <button
-            onClick={() => setFilter('starting')}
-            className={`px-5 py-2.5 text-sm font-semibold rounded-2xl transition-all font-sans ${
-              filter === 'starting'
-                ? 'bg-gradient-to-r from-yellow-500 to-orange-500 text-white shadow-lg shadow-yellow-500/50'
-                : 'bg-gray-800 border border-gray-700 text-gray-400 hover:text-white hover:border-yellow-500/50'
-            }`}
-          >
-            Starting
-          </button>
-          <button
-            onClick={() => setFilter('live')}
-            className={`px-5 py-2.5 text-sm font-semibold rounded-2xl transition-all font-sans ${
-              filter === 'live'
-                ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-lg shadow-cyan-500/50'
-                : 'bg-gray-800 border border-gray-700 text-gray-400 hover:text-white hover:border-cyan-500/50'
-            }`}
-          >
-            Live
-          </button>
-        </div>
-
-        {/* Secondary Filters (Right) */}
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setFilter('finished')}
-            className={`px-4 py-2 text-sm font-medium transition-all ${
-              filter === 'finished'
-                ? 'text-white'
-                : 'text-[#6b7280] hover:text-[#9ca3af]'
-            }`}
-          >
-            Finished
-          </button>
-          <button
-            onClick={() => setFilter('all')}
-            className={`px-4 py-2 text-sm font-medium transition-all ${
-              filter === 'all'
-                ? 'text-white'
-                : 'text-[#6b7280] hover:text-[#9ca3af]'
-            }`}
-          >
-            All
-          </button>
-        </div>
-      </div>
+      {/* Status filter – HUD-style buttons */}
+      <nav className="flex items-center gap-3 flex-wrap pb-6 border-b border-white/5" role="tablist" aria-label="Game status filter">
+        <FilterButton variant="open" active={filter === 'open'} onClick={() => setFilter('open')}>
+          Open
+        </FilterButton>
+        <FilterButton variant="starting" active={filter === 'starting'} onClick={() => setFilter('starting')}>
+          Starting
+        </FilterButton>
+        <FilterButton variant="live" active={filter === 'live'} onClick={() => setFilter('live')}>
+          Live
+        </FilterButton>
+        <FilterButton variant="finished" active={filter === 'finished'} onClick={() => setFilter('finished')}>
+          Finished
+        </FilterButton>
+        <FilterButton variant="all" active={filter === 'all'} onClick={() => setFilter('all')}>
+          All
+        </FilterButton>
+      </nav>
 
       {/* Games Grid */}
       {filteredGames.length === 0 ? (
@@ -222,7 +190,7 @@ export default function GameLobby() {
           <p className="text-sm mt-2">Check back later or create a new game</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 justify-items-center">
           {filteredGames.map((game) => {
             const startTime = BigInt(game.startTime?.toString() || '0');
             const entryFee = BigInt(game.entryFee?.toString() || '0');

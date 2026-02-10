@@ -101,101 +101,102 @@ export default function Sidebar({
   }, [timeRemaining]);
 
   return (
-    <div className="w-80 space-y-4">
+    <div className="sidebar-root w-80 space-y-5 text-white">
       {/* Round Ready to Finalize - Prominent banner at top */}
       {roundShouldHaveEnded && (
-        <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-4 rounded-lg mb-4 animate-pulse">
+        <div className="arena-panel rounded-lg p-4 animate-pulse border-[var(--filter-btn-border-active)] shadow-[0_0_20px_rgba(255,51,102,0.25)]">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-2xl">⚡</span>
             <h3 className="text-lg font-bold text-white">Round Ready to Finalize!</h3>
           </div>
-          <p className="text-sm text-white/90">Be the first to finalize and earn the reward</p>
+          <p className="text-sm text-white/95">Be the first to finalize and earn the reward</p>
         </div>
       )}
 
-      {/* Prize Pool - Yellow border like reference - Clickable */}
-      <button
-        onClick={() => setShowPrizePoolBreakdown(true)}
-        className="w-full bg-[#1a1a1a] border border-[#fbbf24] p-3 text-left hover:border-[#fbbf24]/80 transition-colors cursor-pointer"
-      >
-        <div className="text-xs text-[#9ca3af] mb-1">Prize Pool</div>
-        <div className="text-xl font-semibold text-white">
-          {prizePool !== undefined ? formatEther(prizePool) : '0'} ETH
-        </div>
-        <div className="text-xs text-[#9ca3af] mt-1">Click to view breakdown</div>
-      </button>
+      <div className="sidebar-data-group">
+        {/* Prize Pool - Clickable */}
+        <button
+          onClick={() => setShowPrizePoolBreakdown(true)}
+          className="arena-panel w-full p-3 text-left hover:border-[var(--accent-yellow)]/60 hover:shadow-[0_0_12px_rgba(251,191,36,0.2)] transition-all cursor-pointer"
+        >
+          <div className="text-xs text-[var(--neon-cyan)] mb-1">Prize Pool</div>
+          <div className="text-xl font-semibold text-white">
+            {prizePool !== undefined ? formatEther(prizePool) : '0'} ETH
+          </div>
+          <div className="text-xs text-white/80 mt-1">Click to view breakdown</div>
+        </button>
 
-      {/* Time Remaining */}
-      {timeRemaining > 0 && (
-        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
-          <div className="text-xs text-[#9ca3af] mb-1">Time remaining</div>
-          <div className="text-lg font-semibold text-white font-mono">{countdown}</div>
-        </div>
-      )}
-      
-      {/* Round Info */}
-      {currentRound > 0 && (
-        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
-          <div className="text-xs text-[#9ca3af] mb-1">Round</div>
-          <div className="text-lg font-semibold text-white">{currentRound} / {totalRounds}</div>
-        </div>
-      )}
+        {/* Time Remaining */}
+        {timeRemaining > 0 && (
+          <div className="arena-panel p-3">
+            <div className="text-xs text-[var(--neon-cyan)] mb-1">Time remaining</div>
+            <div className="text-lg font-semibold text-white font-mono">{countdown}</div>
+          </div>
+        )}
 
-      {/* Round Duration */}
-      {currentRound > 0 && (
-        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
-          <div className="text-xs text-[#9ca3af] mb-1">Round Duration</div>
+        {/* Round Info */}
+        {currentRound > 0 && (
+          <div className="arena-panel p-3">
+            <div className="text-xs text-[var(--neon-cyan)] mb-1">Round</div>
+            <div className="text-lg font-semibold text-white">{currentRound} / {totalRounds}</div>
+          </div>
+        )}
+
+        {/* Round Duration */}
+        {currentRound > 0 && (
+          <div className="arena-panel p-3">
+            <div className="text-xs text-[var(--neon-cyan)] mb-1">Round Duration</div>
+            <div className="text-lg font-semibold text-white">
+              {roundDuration >= 3600 
+                ? `${Math.floor(roundDuration / 3600)}h ${Math.floor((roundDuration % 3600) / 60)}m`
+                : `${Math.floor(roundDuration / 60)}m`
+              }
+            </div>
+          </div>
+        )}
+
+        {/* Players Info */}
+        <div className="arena-panel p-3">
+          <div className="text-xs text-[var(--neon-cyan)] mb-1">Players</div>
           <div className="text-lg font-semibold text-white">
-            {roundDuration >= 3600 
-              ? `${Math.floor(roundDuration / 3600)}h ${Math.floor((roundDuration % 3600) / 60)}m`
-              : `${Math.floor(roundDuration / 60)}m`
-            }
+            {activePlayers !== undefined ? (
+              <span>{activePlayers} / {totalPlayers} survivors</span>
+            ) : (
+              <span>{totalPlayers} registered</span>
+            )}
           </div>
         </div>
-      )}
 
-      {/* Players Info */}
-      <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
-        <div className="text-xs text-[#9ca3af] mb-1">Players</div>
-        <div className="text-lg font-semibold text-white">
-          {activePlayers !== undefined ? (
-            <span>{activePlayers} / {totalPlayers} survivors</span>
-          ) : (
-            <span>{totalPlayers} registered</span>
-          )}
-        </div>
+        {/* Easy Deposit Button - Most Important (same glow as Connect Wallet) */}
+        {userStatus === 'not_registered' && entryFee !== undefined && (
+          <div className="arena-panel p-4">
+            <div className="text-xs text-[var(--neon-cyan)] mb-2">Entry Fee</div>
+            <div className="text-lg font-semibold text-white mb-4">
+              {formatEther(entryFee)} ETH
+            </div>
+            <button
+              onClick={() => setShowRegistration(true)}
+              type="button"
+              className="sidebar-deposit-btn mt-2"
+            >
+              Deposit & Join
+            </button>
+          </div>
+        )}
+
+        {/* User Status */}
+        {userStatus !== 'not_registered' && (
+          <div className="arena-panel p-3">
+            <div className="text-xs text-[var(--neon-cyan)] mb-1">Your Status</div>
+            {userStatus === 'registered' && (
+              <div className="text-[var(--accent-green)] font-semibold">Registered</div>
+            )}
+            {userStatus === 'eliminated' && (
+              <div className="text-[var(--neon-pink)] font-semibold">Eliminated</div>
+            )}
+          </div>
+        )}
       </div>
-
-      {/* Easy Deposit Button - Most Important */}
-      {userStatus === 'not_registered' && entryFee !== undefined && (
-        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-4">
-          <div className="text-xs text-[#9ca3af] mb-2">Entry Fee</div>
-          <div className="text-lg font-semibold text-white mb-4">
-            {formatEther(entryFee)} ETH
-          </div>
-          <button
-            onClick={() => {
-              setShowRegistration(true);
-            }}
-            className="w-full px-4 py-3 bg-[#1a1a1a] border border-[#2a2a2a] text-white hover:border-[#3a3a3a] transition-colors font-medium"
-          >
-            Deposit & Join
-          </button>
-        </div>
-      )}
-
-      {/* User Status */}
-      {userStatus !== 'not_registered' && (
-        <div className="bg-[#1a1a1a] border border-[#2a2a2a] p-3">
-          <div className="text-xs text-[#9ca3af] mb-1">Your Status</div>
-          {userStatus === 'registered' && (
-            <div className="text-[#10b981] font-medium">Registered</div>
-          )}
-          {userStatus === 'eliminated' && (
-            <div className="text-red-400 font-medium">Eliminated</div>
-          )}
-        </div>
-      )}
 
       {/* Start Game Button - Anyone can start, not just registered players */}
       {/* Show if game can start, even if reward is 0 or expired (someone needs to start it) */}
@@ -220,15 +221,15 @@ export default function Sidebar({
 
       {/* Finalize Round - Opportunity section when round should have ended */}
       {roundShouldHaveEnded && (
-        <div className="bg-[#1a1a1a] border border-emerald-500/50 p-4 rounded-lg">
+        <div className="arena-panel rounded-lg border-[var(--accent-green)]/50 p-4">
           <div className="text-sm font-semibold text-white mb-3">
             Finalize Round {currentRound}
           </div>
-          <div className="text-2xl font-bold text-emerald-400 mb-1 flex items-center gap-2">
+          <div className="text-2xl font-bold text-[var(--accent-green)] mb-1 flex items-center gap-2">
             <span>💰</span>
             <span>Earn ~${finalizationRewardUsd < 0.01 ? '<0.01' : finalizationRewardUsd.toFixed(2)}</span>
           </div>
-          <div className="text-xs text-[#9ca3af] mb-4">
+          <div className="text-xs text-white/85 mb-4">
             ~{finalizationRewardEth.toFixed(6)} ETH reward for finalizing
           </div>
           <div className="mb-4">
@@ -243,10 +244,10 @@ export default function Sidebar({
               }}
             />
           </div>
-          <p className="text-xs text-[#9ca3af] space-y-1">
+          <p className="text-xs text-white/85 space-y-1">
             <span className="block">Anyone can finalize this round.</span>
             <span className="block">First person gets 1.5× gas cost as reward.</span>
-            <span className="block text-emerald-400/90">Help progress the game and earn ETH!</span>
+            <span className="block text-[var(--accent-green)]">Help progress the game and earn ETH!</span>
           </p>
         </div>
       )}
@@ -288,19 +289,17 @@ export default function Sidebar({
               }}
             />
           ) : (
-            <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-md">
-              <div 
-                className="glass-card rounded-2xl p-6 max-w-md shadow-2xl relative z-10"
-              >
-                <h2 className="text-2xl font-bold mb-4">Unable to Load Entry Fee</h2>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xl">
+              <div className="relative z-10 max-w-md w-full mx-4 rounded-2xl border border-[var(--neon-blue)]/30 bg-[var(--arena-charcoal)]/55 backdrop-blur-sm p-6 shadow-[0_0_40px_rgba(0,212,255,0.08)]">
+                <h2 className="text-2xl font-bold text-white mb-4">Unable to Load Entry Fee</h2>
                 <p className="text-red-400 mb-2">Entry fee information is not available for this game.</p>
-                <p className="text-xs text-gray-400 mb-4">Game ID: {gameId}</p>
-                <p className="text-sm text-gray-300 mb-4">
+                <p className="text-xs text-white/80 mb-4">Game ID: {gameId}</p>
+                <p className="text-sm text-white/90 mb-4">
                   This might happen if the game data is still loading. Please refresh the page and try again.
                 </p>
                 <button
                   onClick={() => setShowRegistration(false)}
-                  className="w-full px-4 py-3 glass-card hover:bg-gray-700/40 rounded-xl font-semibold transition-all"
+                  className="w-full px-4 py-3 rounded-xl border border-[var(--neon-blue)]/30 bg-black/30 text-white font-semibold hover:bg-white/10 transition-colors"
                 >
                   Close
                 </button>

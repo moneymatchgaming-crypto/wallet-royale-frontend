@@ -666,7 +666,7 @@ export default function FinalizeRoundButton({
           w-full rounded-lg font-semibold transition-all
           ${variant === 'prominent' ? 'py-4 px-6 text-lg' : 'px-4 py-3'}
           ${isDisabled
-            ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
+            ? 'bg-gray-700/50 text-white/60 cursor-not-allowed'
             : variant === 'prominent'
               ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white shadow-lg hover:shadow-xl'
               : 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white shadow-lg hover:shadow-xl'
@@ -683,12 +683,12 @@ export default function FinalizeRoundButton({
       </button>
 
       {hash && (
-        <div className="text-xs text-gray-400 text-center">
+        <div className="text-xs text-white/85 text-center">
           <a
             href={`https://sepolia.basescan.org/tx/${hash}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-cyan-400 hover:text-cyan-300"
+            className="text-[var(--neon-cyan)] hover:text-[var(--neon-cyan)]/80"
           >
             View on BaseScan
           </a>

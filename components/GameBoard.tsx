@@ -61,7 +61,7 @@ export default function GameBoard({ gameId, players }: GameBoardProps) {
                 balance={player.balance}
               />
             ) : (
-              <div className="w-full h-full bg-[#1a1a1a] border border-[#2a2a2a] flex items-center justify-center text-[#9ca3af] text-[10px] hover:border-[#3a3a3a] transition-colors">
+              <div className="w-full h-full rounded border border-[var(--neon-blue)]/20 bg-black/40 flex items-center justify-center text-gray-400 text-[10px] hover:border-[var(--neon-blue)]/40 transition-colors">
                 #{index + 1}
               </div>
             )}
