@@ -98,7 +98,6 @@ export default function DebugPage() {
           prizePool: formatEther(financials[0]),
           operationsFund: formatEther(financials[1]),
           platformFee: formatEther(financials[2]),
-          totalGasReimbursed: formatEther(financials[3]),
         },
       });
 
@@ -177,7 +176,6 @@ export default function DebugPage() {
             <div>Prize Pool: {gameState.financials.prizePool} ETH</div>
             <div>Operations Fund: {gameState.financials.operationsFund} ETH</div>
             <div>Platform Fee: {gameState.financials.platformFee} ETH</div>
-            <div>Gas Reimbursed: {gameState.financials.totalGasReimbursed} ETH</div>
           </div>
         </div>
 

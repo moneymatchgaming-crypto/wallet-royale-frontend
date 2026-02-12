@@ -113,21 +113,15 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
           args: [BigInt(gameId), playerAddr],
         }) as any;
         
-        // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, 
-        //                     penaltyAERO, penaltyCAKE, alive, eliminationReason]
-        // alive is at index 6
+        // getPlayer returns: [squareIndex, startETH, alive, eliminationReason] (Phase 1: no penalties)
         const playerArray = Array.isArray(playerData) ? playerData : [
           playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[0],
-          playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[1],
-          playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[2],
-          playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[3],
-          playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[4],
-          playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[5],
-          playerData.alive !== undefined ? playerData.alive : playerData[6],
-          playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[7],
+          playerData.startETH !== undefined ? playerData.startETH : playerData[1],
+          playerData.alive !== undefined ? playerData.alive : playerData[2],
+          playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[3],
         ];
         
-        isAlive = playerArray[6] === true;
+        isAlive = playerArray[2] === true;
         // For getPlayer, we assume registered if we got data back
         isRegistered = true;
       } catch (getPlayerError) {
@@ -139,10 +133,8 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
           args: [BigInt(gameId), playerAddr],
         }) as any;
 
-        // Player struct: [wallet, squareIndex, startETH, startUSDC, startAERO, startCAKE, 
-        //                 startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE,
-        //                 alive, registered, eliminationReason, registrationTime]
-        // alive is at index 11, registered is at index 12
+        // Player struct: [wallet, squareIndex, startETH, startUSDC, startAERO, startCAKE, alive, registered, eliminationReason, registrationTime, eliminationRound]
+        // alive at index 6, registered at index 7
         const playerArray = Array.isArray(player) ? player : [
           player.wallet || player[0],
           player.squareIndex !== undefined ? player.squareIndex : player[1],
@@ -150,19 +142,15 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
           player.startUSDC !== undefined ? player.startUSDC : player[3],
           player.startAERO !== undefined ? player.startAERO : player[4],
           player.startCAKE !== undefined ? player.startCAKE : player[5],
-          player.startValueUSDC !== undefined ? player.startValueUSDC : player[6],
-          player.penaltyETH !== undefined ? player.penaltyETH : player[7],
-          player.penaltyUSDC !== undefined ? player.penaltyUSDC : player[8],
-          player.penaltyAERO !== undefined ? player.penaltyAERO : player[9],
-          player.penaltyCAKE !== undefined ? player.penaltyCAKE : player[10],
-          player.alive !== undefined ? player.alive : player[11],
-          player.registered !== undefined ? player.registered : player[12],
-          player.eliminationReason !== undefined ? player.eliminationReason : player[13],
-          player.registrationTime !== undefined ? player.registrationTime : player[14],
+          player.alive !== undefined ? player.alive : player[6],
+          player.registered !== undefined ? player.registered : player[7],
+          player.eliminationReason !== undefined ? player.eliminationReason : player[8],
+          player.registrationTime !== undefined ? player.registrationTime : player[9],
+          player.eliminationRound !== undefined ? player.eliminationRound : player[10],
         ];
         
-        isAlive = playerArray[11] === true;
-        isRegistered = playerArray[12] === true;
+        isAlive = playerArray[6] === true;
+        isRegistered = playerArray[7] === true;
       }
     } catch (rpcError: any) {
       // Handle RPC rate limits and errors
@@ -284,10 +272,7 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
   }
   
   // If contract says 1 alive, verify by checking actual players
-  // This could happen if:
-  // - Other players were eliminated by violations (monitoring service)
-  // - Only 1 player registered
-  // - Previous round eliminations left only 1
+  // This could happen if only 1 player registered or previous round eliminations left only 1
   if (roundAlivePlayers === 1) {
     // Cross-verify: Check if we actually found 1 alive player
     if (playerData.length === 1) {
@@ -313,7 +298,7 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
   // But don't block finalization - use what we found and let contract validate
   if (roundAlivePlayers > 1 && playerData.length < roundAlivePlayers) {
     console.warn(`⚠️ Mismatch: Contract reports ${roundAlivePlayers} alive but frontend found ${playerData.length}`);
-    console.warn('⚠️ Some players may have been eliminated by violations or RPC sync issue.');
+    console.warn('⚠️ Player count mismatch may be due to RPC sync issue.');
     console.warn('⚠️ Proceeding with available data - contract will validate...');
     // Continue - we'll use the players we found
   }
@@ -500,7 +485,7 @@ export default function FinalizeRoundButton({
     setLoadingReward(true);
     
     try {
-      // Eliminations are computed on-chain; we only pass gameId, roundNumber, gasCost
+      // Eliminations are computed on-chain; we only pass gameId and roundNumber (no gasCost)
       console.log('Simulating finalization (on-chain elimination)...');
       const { createPublicClient, http } = await import('viem');
       const { baseSepolia } = await import('viem/chains');
@@ -512,7 +497,7 @@ export default function FinalizeRoundButton({
         address: CONTRACT_ADDRESS,
         abi: contractABI,
         functionName: 'finalizeRound',
-        args: [BigInt(gameId), BigInt(roundNumber), 0n],
+        args: [BigInt(gameId), BigInt(roundNumber)],
         account: address,
       });
       console.log('✓ Simulation passed, sending transaction...');
@@ -520,7 +505,7 @@ export default function FinalizeRoundButton({
         address: CONTRACT_ADDRESS,
         abi: contractABI,
         functionName: 'finalizeRound',
-        args: [BigInt(gameId), BigInt(roundNumber), 0n],
+        args: [BigInt(gameId), BigInt(roundNumber)],
         gas: 2000000n,
       });
       

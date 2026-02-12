@@ -107,11 +107,14 @@ The frontend connects to the WalletRoyaleRestricted contract on Base Sepolia:
 - Animations: fade-in, pulse for start button
 - Responsive: Desktop (10×10), Tablet (scrollable), Mobile (5×5 visible)
 
+## Game Flow (from UI)
+
+Registration → Start → Trade on whitelisted DEXs → Finalize (anyone) → Repeat until one winner.
+
 ## Next Steps
 
 - [ ] Add WebSocket hook for real-time updates
 - [ ] Implement leaderboard view
 - [ ] Add game creation modal
-- [ ] Connect to monitoring service WebSocket
 - [ ] Add player ranking calculations
 - [ ] Add transaction history

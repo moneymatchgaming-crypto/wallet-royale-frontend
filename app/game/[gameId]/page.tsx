@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAccount, useReadContract } from 'wagmi';
-import { formatEther, formatUnits, parseAbiItem } from 'viem';
+import { formatEther, formatUnits, parseAbiItem, parseEventLogs } from 'viem';
 import { CONTRACT_ADDRESS, contractABI, publicClient } from '@/lib/contract';
 import GameBoard from '@/components/GameBoard';
 import Sidebar from '@/components/Sidebar';
@@ -154,7 +154,7 @@ export default function GamePage() {
   const [prize1st, setPrize1st] = useState<bigint>(0n);
   const [prize2nd, setPrize2nd] = useState<bigint>(0n);
   const [prize3rd, setPrize3rd] = useState<bigint>(0n);
-  const [losers, setLosers] = useState<Array<{ address: Address; gainPercent: number }>>([]);
+  const [losers, setLosers] = useState<Array<{ address: Address; gainPercent: number; eliminationRound: number }>>([]);
   const [finalizationTxHash, setFinalizationTxHash] = useState<string | null>(null);
   const [eliminatedPlayers, setEliminatedPlayers] = useState<string[]>([]);
   const [registrationCountdown, setRegistrationCountdown] = useState<string>('');
@@ -304,21 +304,32 @@ export default function GamePage() {
       try {
         let finalizeTxHash: string | null = null;
 
-        // Get finalize transaction: same contract + RPC as snapshots. Use RoundFinalized — the
-        // latest one for this game is the final round's tx, which also calls finalizeGame (prize payouts).
+        // Get finalize transaction: RoundFinalized for final round (game.currentRound) is the tx that emits PrizePaid.
         try {
           const blockNumber = await publicClient.getBlockNumber();
-          const fromBlock = blockNumber > 100_000n ? blockNumber - 100_000n : 0n;
-          const roundLogs = await publicClient.getLogs({
-            address: CONTRACT_ADDRESS,
-            event: parseAbiItem('event RoundFinalized(uint256 indexed gameId, uint256 roundNumber, uint256 survivors)'),
-            args: { gameId: BigInt(gameId) },
-            fromBlock,
-            toBlock: blockNumber,
-          });
-          // Latest RoundFinalized by block = final round = same tx as prize payouts
-          if (roundLogs.length > 0) {
-            const sorted = [...roundLogs].sort((a, b) => (b.blockNumber > a.blockNumber ? 1 : -1));
+          const fetchRoundLogs = async (from: bigint) =>
+            publicClient.getContractEvents({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              eventName: 'RoundFinalized',
+              args: { gameId: BigInt(gameId) },
+              fromBlock: from,
+              toBlock: blockNumber,
+            });
+          let roundLogs: Awaited<ReturnType<typeof fetchRoundLogs>>;
+          try {
+            roundLogs = await fetchRoundLogs(0n);
+          } catch {
+            roundLogs = blockNumber > 100_000n ? await fetchRoundLogs(blockNumber - 100_000n) : [];
+          }
+          type RoundFinalizedLog = { args: { roundNumber: bigint }; transactionHash: string; blockNumber: bigint };
+          const roundEvents = roundLogs as unknown as RoundFinalizedLog[];
+          const finalRoundEvent = roundEvents.find((e) => e.args.roundNumber === game.currentRound);
+          if (finalRoundEvent) {
+            finalizeTxHash = finalRoundEvent.transactionHash;
+            console.log('🎯 Finalize tx from RoundFinalized(round=%s):', String(game.currentRound), finalizeTxHash);
+          } else if (roundEvents.length > 0) {
+            const sorted = [...roundEvents].sort((a, b) => (b.blockNumber > a.blockNumber ? 1 : -1));
             finalizeTxHash = sorted[0].transactionHash;
             console.log('🎯 Finalize tx from latest RoundFinalized:', finalizeTxHash);
           }
@@ -338,7 +349,7 @@ export default function GamePage() {
         const poolForDisplay = (game.prizePool != null && game.prizePool > 0n) ? game.prizePool : calculatedPrizePool;
         setPrizeAmount(poolForDisplay);
 
-        // Find Top 3 (alive players sorted by gain %) and all losers (eliminated players)
+        // Placements: when game is finalized, use on-chain PrizePaid events (source of truth)
         const players = gamePlayers as Address[];
         console.log(`👥 Processing ${players.length} players for game #${gameId}`);
         
@@ -353,61 +364,162 @@ export default function GamePage() {
         }
         
         const totalRounds = Number(game.totalRounds);
-        const losersList: Array<{ address: Address; gainPercent: number }> = [];
-        const aliveWithGain: Array<{ address: Address; gainPercent: number | null }> = [];
-
-        for (const player of players) {
-          try {
-            const playerData = await publicClient.readContract({
-              address: CONTRACT_ADDRESS,
-              abi: contractABI,
-              functionName: 'getPlayer',
-              args: [BigInt(gameId), player],
-            });
-            
-            // Check if player is alive (index 6)
-            const isAlive = (playerData as any)[6] === true;
-            console.log(`  Player ${player.slice(0, 10)}... - Alive: ${isAlive}`);
-            
-            // Final Gain = Round 1 Start → Final/Elimination Round End (gameplay only)
-            const gainPercent = await calculateGameplayGainPercent(player, isAlive, totalRounds);
-            
-            if (isAlive) {
-              aliveWithGain.push({ address: player, gainPercent });
-            } else {
-              losersList.push({ 
-                address: player, 
-                gainPercent: gainPercent !== null ? gainPercent : 0 
-              });
-            }
-          } catch (error) {
-            console.error(`❌ Error checking player ${player}:`, error);
-            losersList.push({ address: player, gainPercent: 0 });
-          }
-        }
-
-        // Sort alive by gain % descending (best first), take Top 3
-        aliveWithGain.sort((a, b) => {
-          const ga = a.gainPercent ?? -Infinity;
-          const gb = b.gainPercent ?? -Infinity;
-          return gb - ga;
-        });
         const pool = poolForDisplay;
         const firstPlace = (pool * 60n) / 100n;
         const secondPlace = (pool * 30n) / 100n;
         const thirdPlace = (pool * 10n) / 100n;
+
+        if (game.finalized) {
+          // Source of truth: PrizePaid events. Prefer finalization tx receipt (exact logs); else getContractEvents.
+          type PrizePaidArgs = { place: number | bigint; winner: Address; amount: bigint };
+          type Placement = { place: 1 | 2 | 3; winner: Address; amount: bigint };
+
+          const applyPlacements = async (placementsFromEvents: Placement[]) => {
+            if (placementsFromEvents.length === 0) return false;
+            const top3Set = new Set(placementsFromEvents.map((p) => p.winner.toLowerCase()));
+            const winnersList: WinnerData[] = [];
+            for (const p of placementsFromEvents) {
+              const gainPercent = await calculateGameplayGainPercent(p.winner, p.place === 1, totalRounds);
+              winnersList.push({ address: p.winner, place: p.place, prize: p.amount, gainPercent });
+            }
+            if (placementsFromEvents.some((p) => p.place === 1)) setPrize1st(placementsFromEvents.find((p) => p.place === 1)!.amount);
+            if (placementsFromEvents.some((p) => p.place === 2)) setPrize2nd(placementsFromEvents.find((p) => p.place === 2)!.amount);
+            if (placementsFromEvents.some((p) => p.place === 3)) setPrize3rd(placementsFromEvents.find((p) => p.place === 3)!.amount);
+            const losersList: Array<{ address: Address; gainPercent: number; eliminationRound: number }> = [];
+            for (const player of players) {
+              if (top3Set.has(player.toLowerCase())) continue;
+              // Fetch eliminationRound from the players mapping (index 10)
+              let elimRound = 0;
+              try {
+                const playerStruct = await publicClient.readContract({
+                  address: CONTRACT_ADDRESS,
+                  abi: contractABI,
+                  functionName: 'players',
+                  args: [BigInt(gameId), player],
+                });
+                elimRound = Number((playerStruct as any[])[10] || 0n);
+              } catch (e) {
+                console.warn(`Could not fetch eliminationRound for ${player}:`, e);
+              }
+              const gainPercent = await calculateGameplayGainPercent(player, false, totalRounds);
+              losersList.push({ address: player, gainPercent: gainPercent !== null ? gainPercent : 0, eliminationRound: elimRound });
+            }
+            // Sort by elimination round descending (later round = better placement), then gain% as tiebreaker
+            losersList.sort((a, b) => b.eliminationRound - a.eliminationRound || b.gainPercent - a.gainPercent);
+            setWinners(winnersList);
+            setLosers(losersList);
+            if (finalizeTxHash) setFinalizationTxHash(finalizeTxHash);
+            setLoadingWinnerData(false);
+            return true;
+          };
+
+          try {
+            let placementsFromEvents: Placement[] = [];
+
+            // 1) Prefer finalization tx receipt (same tx that emitted PrizePaid — no block range issues)
+            if (finalizeTxHash) {
+              const receipt = await publicClient.getTransactionReceipt({ hash: finalizeTxHash as `0x${string}` });
+              if (receipt?.logs?.length) {
+                const contractLogs = receipt.logs.filter((l) => l.address.toLowerCase() === CONTRACT_ADDRESS.toLowerCase());
+                const parsed = parseEventLogs({
+                  abi: contractABI,
+                  logs: contractLogs,
+                  eventName: 'PrizePaid',
+                  args: { gameId: BigInt(gameId) },
+                });
+                placementsFromEvents = parsed
+                  .map((e) => {
+                    const args = (e as unknown as { args: PrizePaidArgs }).args;
+                    return { place: Number(args.place) as 1 | 2 | 3, winner: args.winner, amount: args.amount };
+                  })
+                  .sort((a, b) => a.place - b.place);
+                if (placementsFromEvents.length > 0) {
+                  console.log('✅ Placements from finalization tx receipt:', placementsFromEvents.length, 'PrizePaid events');
+                }
+              }
+            }
+
+            // 2) Fallback: getContractEvents for PrizePaid (can hit RPC block range limits)
+            if (placementsFromEvents.length === 0) {
+              const blockNumber = await publicClient.getBlockNumber();
+              const fetchPrizeLogs = async (from: bigint) =>
+                publicClient.getContractEvents({
+                  address: CONTRACT_ADDRESS,
+                  abi: contractABI,
+                  eventName: 'PrizePaid',
+                  args: { gameId: BigInt(gameId) },
+                  fromBlock: from,
+                  toBlock: blockNumber,
+                });
+              let prizeLogs: Awaited<ReturnType<typeof fetchPrizeLogs>>;
+              try {
+                prizeLogs = await fetchPrizeLogs(0n);
+              } catch {
+                prizeLogs = blockNumber > 100_000n ? await fetchPrizeLogs(blockNumber - 100_000n) : [];
+              }
+              placementsFromEvents = prizeLogs
+                .map((log) => {
+                  const args = (log as unknown as { args: PrizePaidArgs }).args;
+                  return { place: Number(args.place) as 1 | 2 | 3, winner: args.winner, amount: args.amount };
+                })
+                .sort((a, b) => a.place - b.place);
+            }
+
+            if (await applyPlacements(placementsFromEvents)) return;
+          } catch (prizeError) {
+            console.warn('Could not fetch PrizePaid events, falling back to computed placements:', prizeError);
+          }
+        }
+
+        // Fallback: infer placements from alive status + eliminationRound (matches contract logic)
+        // 1st = last alive player, 2nd = eliminated in final round, 3rd = eliminated in penultimate round
+        const finalRound = Number(game.currentRound);
+        const losersList: Array<{ address: Address; gainPercent: number; eliminationRound: number }> = [];
+        let firstPlayer: { address: Address; gainPercent: number | null } | null = null;
+        let secondPlayer: { address: Address; gainPercent: number | null } | null = null;
+        let thirdPlayer: { address: Address; gainPercent: number | null } | null = null;
+
+        for (const player of players) {
+          try {
+            // Use players mapping to get eliminationRound (index 10) and alive (index 6)
+            const playerStruct = await publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: contractABI,
+              functionName: 'players',
+              args: [BigInt(gameId), player],
+            });
+            const isAlive = (playerStruct as any[])[6] === true;
+            const elimRound = Number((playerStruct as any[])[10] || 0n);
+            const gainPercent = await calculateGameplayGainPercent(player, isAlive, totalRounds);
+
+            if (isAlive) {
+              // Last alive = 1st place
+              firstPlayer = { address: player, gainPercent };
+            } else if (elimRound === finalRound && !secondPlayer) {
+              // First player eliminated in final round = 2nd place (matches contract _findPlayerEliminatedInRound)
+              secondPlayer = { address: player, gainPercent };
+            } else if (elimRound === finalRound - 1 && !thirdPlayer && finalRound > 1) {
+              // First player eliminated in penultimate round = 3rd place
+              thirdPlayer = { address: player, gainPercent };
+            } else {
+              losersList.push({ address: player, gainPercent: gainPercent !== null ? gainPercent : 0, eliminationRound: elimRound });
+            }
+          } catch (error) {
+            console.error(`❌ Error checking player ${player}:`, error);
+            losersList.push({ address: player, gainPercent: 0, eliminationRound: 0 });
+          }
+        }
+
         setPrize1st(firstPlace);
-        setPrize2nd(secondPlace);
-        setPrize3rd(thirdPlace);
+        setPrize2nd(secondPlayer ? secondPlace : 0n);
+        setPrize3rd(thirdPlayer ? thirdPlace : 0n);
         const winnersList: WinnerData[] = [];
-        if (aliveWithGain.length >= 1) winnersList.push({ address: aliveWithGain[0].address, place: 1, prize: firstPlace, gainPercent: aliveWithGain[0].gainPercent });
-        if (aliveWithGain.length >= 2) winnersList.push({ address: aliveWithGain[1].address, place: 2, prize: secondPlace, gainPercent: aliveWithGain[1].gainPercent });
-        if (aliveWithGain.length >= 3) winnersList.push({ address: aliveWithGain[2].address, place: 3, prize: thirdPlace, gainPercent: aliveWithGain[2].gainPercent });
-
-        // Sort losers by gain percentage (best first) so order is 2nd, 3rd, 4th, 5th...
-        losersList.sort((a, b) => b.gainPercent - a.gainPercent);
-
-        console.log(`✅ Setting Top 3 winners: ${winnersList.length}, losers: ${losersList.length}`);
+        if (firstPlayer) winnersList.push({ address: firstPlayer.address, place: 1, prize: firstPlace + (secondPlayer ? 0n : secondPlace) + (thirdPlayer ? 0n : thirdPlace), gainPercent: firstPlayer.gainPercent });
+        if (secondPlayer) winnersList.push({ address: secondPlayer.address, place: 2, prize: secondPlace, gainPercent: secondPlayer.gainPercent });
+        if (thirdPlayer) winnersList.push({ address: thirdPlayer.address, place: 3, prize: thirdPlace, gainPercent: thirdPlayer.gainPercent });
+        // Sort losers by elimination round descending (later round = better placement), then gain% as tiebreaker
+        losersList.sort((a, b) => b.eliminationRound - a.eliminationRound || b.gainPercent - a.gainPercent);
+        console.log(`✅ Setting Top 3 (computed): ${winnersList.length}, losers: ${losersList.length}`);
         setWinners(winnersList);
         setLosers(losersList);
 
@@ -547,16 +659,10 @@ export default function GamePage() {
               args: [BigInt(gameId), player],
             });
             
-            // Only consider alive players (alive is at index 6)
-            if ((playerData as any)[6] === true) {
-              // Get player's current adjusted ETH balance
-              const adjustedBalances = await publicClient.readContract({
-                address: CONTRACT_ADDRESS,
-                abi: contractABI,
-                functionName: 'getAdjustedBalances',
-                args: [BigInt(gameId), player],
-              });
-              const [currentETH] = adjustedBalances as [bigint];
+            // getPlayer returns [squareIndex, startETH, alive, eliminationReason] — alive at index 2
+            if ((playerData as any)[2] === true) {
+              // Use raw ETH balance (no getAdjustedBalances after Phase 1)
+              const currentETH = await publicClient.getBalance({ address: player });
               
               // Get round-start ETH balance
               let roundStartETH = await publicClient.readContract({
@@ -692,21 +798,15 @@ export default function GamePage() {
               args: [BigInt(gameId), player],
             });
             
-            // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, 
-            //                     penaltyAERO, penaltyCAKE, alive, eliminationReason]
-            // alive is at index 6
+            // getPlayer returns: [squareIndex, startETH, alive, eliminationReason] (no penalties)
             const playerArray = Array.isArray(playerData) ? playerData : [
               playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[0],
-              playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[1],
-              playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[2],
-              playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[3],
-              playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[4],
-              playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[5],
-              playerData.alive !== undefined ? playerData.alive : playerData[6],
-              playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[7],
+              playerData.startETH !== undefined ? playerData.startETH : playerData[1],
+              playerData.alive !== undefined ? playerData.alive : playerData[2],
+              playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[3],
             ];
             
-            isCurrentlyAlive = playerArray[6] === true;
+            isCurrentlyAlive = playerArray[2] === true;
           } catch (error) {
             console.warn(`Failed to fetch player data for ${player}:`, error);
             continue;
@@ -825,17 +925,14 @@ export default function GamePage() {
     );
   }
 
-  // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE, alive, eliminationReason]
-  // Index 0 = squareIndex, Index 6 = alive
-  // If player is not registered, the mapping returns default values (squareIndex = 0, alive = false)
-  // If player is registered but eliminated, alive = false but squareIndex > 0
+  // getPlayer returns: [squareIndex, startETH, alive, eliminationReason] (Index 0 = squareIndex, Index 2 = alive)
   const userStatus = !address
     ? 'not_registered'
     : !userPlayerData
     ? 'not_registered'
-    : (userPlayerData as any)[0] === 0 && (userPlayerData as any)[6] === false // squareIndex = 0 and alive = false = not registered
+    : (userPlayerData as any)[0] === 0 && (userPlayerData as any)[2] === false // squareIndex = 0 and alive = false = not registered
     ? 'not_registered'
-    : (userPlayerData as any)[6] === false // alive = false but squareIndex > 0 = eliminated
+    : (userPlayerData as any)[2] === false // alive = false but squareIndex > 0 = eliminated
     ? 'eliminated'
     : 'registered';
 
@@ -848,6 +945,11 @@ export default function GamePage() {
     'FINALIZED': 'Finished',
     'CANCELLED': 'Cancelled',
   };
+
+  // When game is finalized, only show rounds that actually happened (1..currentRound). No Round N+1 row.
+  const maxRoundToShow = game
+    ? (game.finalized ? Math.max(1, Number(game.currentRound)) : Math.min(10, Math.max(1, Number(game.currentRound)), Number(game.totalRounds || 10)))
+    : 1;
 
   return (
     <div className="min-h-screen relative">
@@ -982,7 +1084,7 @@ export default function GamePage() {
                             <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 z-10 bg-black/40">
                               Players
                             </th>
-                            {Array.from({ length: 10 }, (_, i) => i + 1).map((roundNum) => (
+                            {Array.from({ length: maxRoundToShow }, (_, i) => i + 1).map((roundNum) => (
                               <th
                                 key={roundNum}
                                 colSpan={2}
@@ -1003,7 +1105,7 @@ export default function GamePage() {
                           {snapshots.size > 0 ? (
                             Array.from(snapshots.entries()).map(([playerAddress, playerSnapshots]): React.ReactElement => {
                               const lastRound = playerSnapshots.size > 0 
-                                ? Math.max(...Array.from(playerSnapshots.keys()))
+                                ? Math.max(...Array.from(playerSnapshots.keys()).filter((r) => r <= maxRoundToShow))
                                 : 0;
                               const currentRound = Number(game.currentRound);
                               const wasEliminated = lastRound > 0 && lastRound < currentRound;
@@ -1027,12 +1129,11 @@ export default function GamePage() {
                                       )}
                                     </div>
                                   </td>
-                                  {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => {
+                                  {Array.from({ length: maxRoundToShow }, (_, i) => i + 1).flatMap((roundNum) => {
                                     const startETH = playerSnapshots.get(roundNum);
-                                    // For Round 2+, use previous round's End as Start if Start doesn't exist
-                                    // This handles the case where Round 2 Start = Round 1 End (same snapshot)
+                                    // For Round 2+, use previous round's End as Start only if that round actually happened (don't infer Round N+1 Start from Round N End when game ended in Round N)
                                     let displayStartETH = startETH;
-                                    if (!startETH && roundNum > 1) {
+                                    if (!startETH && roundNum > 1 && roundNum <= maxRoundToShow) {
                                       const prevRoundEnd = roundEndSnapshots.get(playerAddress)?.get(roundNum - 1);
                                       if (prevRoundEnd) {
                                         displayStartETH = prevRoundEnd;
@@ -1105,7 +1206,7 @@ export default function GamePage() {
                                     {playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}
                                   </span>
                                 </td>
-                                {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => [
+                                {Array.from({ length: maxRoundToShow }, (_, i) => i + 1).flatMap((roundNum) => [
                                   <td
                                     key={`${playerAddress}-${roundNum}-start`}
                                     className="py-3 px-3 text-center text-xs text-gray-600 whitespace-nowrap min-w-[120px]"
@@ -1182,6 +1283,7 @@ export default function GamePage() {
                           <tr className="border-b border-white/10 text-left">
                             <th className="py-2 pr-4 text-xs text-white/60 font-medium">Place</th>
                             <th className="py-2 pr-4 text-xs text-white/60 font-medium">Wallet</th>
+                            <th className="py-2 pr-4 text-xs text-white/60 font-medium text-right">Eliminated</th>
                             <th className="py-2 text-xs text-white/60 font-medium text-right">Prize</th>
                             <th className="py-2 pl-4 text-xs text-white/60 font-medium text-right">Gain</th>
                           </tr>
@@ -1191,23 +1293,50 @@ export default function GamePage() {
                             <tr className="border-b border-gray-800/80 hover:bg-white/5">
                               <td className="py-3 pr-4 text-amber-400/90 font-medium">1st</td>
                               <td className="py-3 pr-4 font-mono text-sm text-gray-300 truncate max-w-[200px]" title={winners[0].address}>{winners[0].address}</td>
+                              <td className="py-3 pr-4 text-sm text-emerald-400 text-right">Survivor</td>
                               <td className="py-3 text-sm text-[#fbbf24] tabular-nums text-right">{formatEther(prize1st || winners[0].prize)} ETH</td>
                               <td className={`py-3 pl-4 font-semibold text-right ${(winners[0].gainPercent ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                 {winners[0].gainPercent != null ? `${winners[0].gainPercent >= 0 ? '+' : ''}${Number(winners[0].gainPercent).toFixed(2)}%` : 'N/A'}
                               </td>
                             </tr>
                           )}
+                          {winners[1] && (
+                            <tr className="border-b border-gray-800/80 hover:bg-white/5">
+                              <td className="py-3 pr-4 text-white/80 font-medium">2nd</td>
+                              <td className="py-3 pr-4 font-mono text-sm text-gray-300 truncate max-w-[200px]" title={winners[1].address}>{winners[1].address}</td>
+                              <td className="py-3 pr-4 text-sm text-red-400/80 text-right">Round {Number(game.currentRound)}</td>
+                              <td className="py-3 text-sm text-right">
+                                {(prize2nd || winners[1].prize) > 0n ? <span className="text-[#10b981] tabular-nums">{formatEther(prize2nd || winners[1].prize)} ETH</span> : '—'}
+                              </td>
+                              <td className={`py-3 pl-4 font-semibold text-right ${(winners[1].gainPercent ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {winners[1].gainPercent != null ? `${winners[1].gainPercent >= 0 ? '+' : ''}${Number(winners[1].gainPercent).toFixed(2)}%` : 'N/A'}
+                              </td>
+                            </tr>
+                          )}
+                          {winners[2] && (
+                            <tr className="border-b border-gray-800/80 hover:bg-white/5">
+                              <td className="py-3 pr-4 text-white/80 font-medium">3rd</td>
+                              <td className="py-3 pr-4 font-mono text-sm text-gray-300 truncate max-w-[200px]" title={winners[2].address}>{winners[2].address}</td>
+                              <td className="py-3 pr-4 text-sm text-red-400/80 text-right">Round {Math.max(1, Number(game.currentRound) - 1)}</td>
+                              <td className="py-3 text-sm text-right">
+                                {(prize3rd || winners[2].prize) > 0n ? <span className="text-[#10b981] tabular-nums">{formatEther(prize3rd || winners[2].prize)} ETH</span> : '—'}
+                              </td>
+                              <td className={`py-3 pl-4 font-semibold text-right ${(winners[2].gainPercent ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {winners[2].gainPercent != null ? `${winners[2].gainPercent >= 0 ? '+' : ''}${Number(winners[2].gainPercent).toFixed(2)}%` : 'N/A'}
+                              </td>
+                            </tr>
+                          )}
                           {losers.map((loser, index) => {
-                            const place = 2 + index;
-                            const placeLabel = place === 2 ? '2nd' : place === 3 ? '3rd' : `${place}th`;
-                            const prizeEth = place === 2 ? prize2nd : place === 3 ? prize3rd : 0n;
+                            const place = winners.length + 1 + index;
+                            const placeLabel = place === 2 ? '2nd' : place === 3 ? '3rd' : place === 4 ? '4th' : place === 5 ? '5th' : `${place}th`;
                             return (
                               <tr key={loser.address} className="border-b border-gray-800/80 hover:bg-white/5">
                                 <td className="py-3 pr-4 text-white/80 font-medium">{placeLabel}</td>
                                 <td className="py-3 pr-4 font-mono text-sm text-gray-300 truncate max-w-[200px]" title={loser.address}>{loser.address}</td>
-                                <td className="py-3 text-sm text-right">
-                                  {prizeEth > 0n ? <span className="text-[#10b981] tabular-nums">{formatEther(prizeEth)} ETH</span> : '—'}
+                                <td className="py-3 pr-4 text-sm text-red-400/80 text-right">
+                                  {loser.eliminationRound > 0 ? `Round ${loser.eliminationRound}` : '—'}
                                 </td>
+                                <td className="py-3 text-sm text-right">—</td>
                                 <td className={`py-3 pl-4 font-semibold text-right ${loser.gainPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                   {loser.gainPercent >= 0 ? '+' : ''}{Number(loser.gainPercent).toFixed(2)}%
                                 </td>
@@ -1266,7 +1395,7 @@ export default function GamePage() {
                           <thead>
                             <tr className="border-b border-white/10">
                               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-300 sticky left-0 z-10 bg-black/40">Players</th>
-                              {Array.from({ length: 10 }, (_, i) => i + 1).map((roundNum) => (
+                              {Array.from({ length: maxRoundToShow }, (_, i) => i + 1).map((roundNum) => (
                                 <th key={roundNum} colSpan={2} className="text-center py-3 px-2 text-xs font-semibold text-gray-400">
                                   <div className="flex flex-col gap-1">
                                     <span>Round {roundNum}</span>
@@ -1283,6 +1412,7 @@ export default function GamePage() {
                             {snapshots.size > 0 ? (
                               Array.from(snapshots.entries()).map(([playerAddress, playerSnapshots]): React.ReactElement => {
                                 const totalRounds = Number(game?.totalRounds ?? 0);
+                                const finalRound = game?.finalized ? Math.max(1, Number(game.currentRound)) : totalRounds;
                                 const winnerSet = new Set(winners.map((w) => w.address.toLowerCase()));
                                 const wasEliminated = winnerSet.size > 0 && !winnerSet.has(playerAddress.toLowerCase());
                                 const winnerEntry = winners.find((w) => w.address.toLowerCase() === playerAddress.toLowerCase());
@@ -1299,17 +1429,17 @@ export default function GamePage() {
                                         {wasEliminated && !winnerEntry && <span className="text-xs text-red-400 font-medium whitespace-nowrap">(Eliminated)</span>}
                                       </div>
                                     </td>
-                                    {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => {
+                                    {Array.from({ length: maxRoundToShow }, (_, i) => i + 1).flatMap((roundNum) => {
                                       const startETH = playerSnapshots.get(roundNum);
                                       let displayStartETH = startETH;
-                                      if (!startETH && roundNum > 1) {
+                                      if (!startETH && roundNum > 1 && roundNum <= maxRoundToShow) {
                                         const prevRoundEnd = roundEndSnapshots.get(playerAddress)?.get(roundNum - 1);
                                         if (prevRoundEnd) displayStartETH = prevRoundEnd;
                                       }
                                       const endETH = roundEndSnapshots.get(playerAddress)?.get(roundNum);
                                       const hasStart = displayStartETH !== undefined;
                                       const hasEnd = endETH !== undefined;
-                                      const isEliminationRound = wasEliminated && totalRounds > 0 && roundNum === totalRounds;
+                                      const isEliminationRound = wasEliminated && finalRound > 0 && roundNum === finalRound;
                                       const startFromPrevEnd = !startETH && roundNum > 1 && displayStartETH !== undefined;
                                       return [
                                         <td
@@ -1333,7 +1463,7 @@ export default function GamePage() {
                               gamePlayers ? Array.from(gamePlayers as Address[]).map((playerAddress): React.ReactElement => (
                                 <tr key={playerAddress} className="border-b border-white/5">
                                   <td className="py-3 px-4 text-sm font-mono text-gray-300 sticky left-0 z-10 bg-black/40"><span className="truncate max-w-[200px]">{playerAddress.slice(0, 6)}...{playerAddress.slice(-4)}</span></td>
-                                  {Array.from({ length: 10 }, (_, i) => i + 1).flatMap((roundNum) => [
+                                  {Array.from({ length: maxRoundToShow }, (_, i) => i + 1).flatMap((roundNum) => [
                                     <td key={`${playerAddress}-${roundNum}-start`} className="py-3 px-3 text-center text-xs text-gray-500 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
                                     <td key={`${playerAddress}-${roundNum}-end`} className="py-3 px-3 text-center text-xs text-gray-500 border-l border-white/10 whitespace-nowrap min-w-[120px]"><span>—</span></td>,
                                   ])}
@@ -1346,6 +1476,11 @@ export default function GamePage() {
                     )}
                     <div className="mt-4 text-xs text-gray-500">
                       Snapshots are taken at the start and end of each round to calculate percentage gains.
+                      {game?.finalized && (
+                        <span className="block mt-1 text-gray-400">
+                          Only rounds that were played are shown. Final payouts (finalization reward, prizes) are sent after the final round and are not included in round snapshots.
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
