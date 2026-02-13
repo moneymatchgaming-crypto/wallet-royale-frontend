@@ -82,6 +82,21 @@
   opacity: 0.5;
 }
 
+/* Swap modal panel: same rounded edges and solid background as Create Game / site panels */
+.swap-modal-panel {
+  box-sizing: border-box;
+  background: #0a0c14;
+  background-image:
+    linear-gradient(180deg, rgba(0, 217, 255, 0.04) 0%, transparent 40%),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+  border: 2px solid var(--filter-btn-border-inactive);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    var(--filter-btn-glow-inactive);
+  border-radius: var(--filter-btn-radius);
+}
+
 /* Create Game modal: solid dark panel (not transparent), text inset from edges, equal left/right space */
 .create-game-modal-panel {
   box-sizing: border-box;

@@ -9,6 +9,7 @@ import RegistrationModal from './RegistrationModal';
 import PrizePoolBreakdown from './PrizePoolBreakdown';
 import FinalizeRoundButton from './FinalizeRoundButton';
 import CancelGameButton from './CancelGameButton';
+import SwapModal from './SwapModal';
 
 const ETH_PRICE_USD = 2500; // Approximate for "Earn ~$X.XX" display
 
@@ -55,6 +56,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const [showRegistration, setShowRegistration] = useState(false);
   const [showPrizePoolBreakdown, setShowPrizePoolBreakdown] = useState(false);
+  const [showSwap, setShowSwap] = useState(false);
   const [countdown, setCountdown] = useState<string>('');
 
   const { data: finalizationRewardWei } = useReadContract({
@@ -120,10 +122,10 @@ export default function Sidebar({
           className="arena-panel w-full p-3 text-left hover:border-[var(--accent-yellow)]/60 hover:shadow-[0_0_12px_rgba(251,191,36,0.2)] transition-all cursor-pointer"
         >
           <div className="text-xs text-[var(--neon-cyan)] mb-1">Prize Pool</div>
-          <div className="text-xl font-semibold text-white">
+          <div className="text-xl font-semibold text-[#10b981]">
             {prizePool !== undefined ? formatEther(prizePool) : '0'} ETH
           </div>
-          <div className="text-xs text-white/80 mt-1">Click to view breakdown</div>
+          <div className="text-xs mt-1" style={{ color: 'rgb(148, 163, 184)' }}>Click to view breakdown</div>
         </button>
 
         {/* Time Remaining */}
@@ -167,7 +169,7 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Easy Deposit Button - Most Important (same glow as Connect Wallet) */}
+        {/* Easy Deposit Button - Same aesthetic as Create Game primary button */}
         {userStatus === 'not_registered' && entryFee !== undefined && (
           <div className="arena-panel p-4">
             <div className="text-xs text-[var(--neon-cyan)] mb-2">Entry Fee</div>
@@ -177,7 +179,7 @@ export default function Sidebar({
             <button
               onClick={() => setShowRegistration(true)}
               type="button"
-              className="sidebar-deposit-btn mt-2"
+              className="create-game-modal-btn create-game-modal-btn-primary mt-2"
             >
               Deposit & Join
             </button>
@@ -270,6 +272,20 @@ export default function Sidebar({
           />
         </div>
       )}
+
+      {/* Swap Tokens - Same aesthetic as Create Game panel secondary button (Cancel) */}
+      <button
+        onClick={() => setShowSwap(true)}
+        type="button"
+        className="create-game-modal-btn flex items-center justify-center gap-2"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4" />
+        </svg>
+        Swap Tokens
+      </button>
+
+      {showSwap && <SwapModal onClose={() => setShowSwap(false)} />}
 
       {showRegistration && (
         <>

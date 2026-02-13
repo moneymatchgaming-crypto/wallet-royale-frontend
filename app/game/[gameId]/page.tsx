@@ -1264,14 +1264,14 @@ export default function GamePage() {
                     <div className="flex flex-wrap items-baseline justify-between gap-3">
                       <div className="text-sm font-semibold text-white/90">Placements</div>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-                        <span className="text-white/70">
+                        <span className="text-white">
                           Prize pool (paid out): <span className="text-[#10b981] font-semibold tabular-nums">
                             {prizeAmount > 0n ? formatEther(prizeAmount) : formatEther(game.prizePool || 0n)} ETH
                           </span>
                           {prizeAmount === 0n && game.prizePool === 0n && game.entryFee && game.playerCount && (
-                            <span className="text-white/50"> (calc. {formatEther((game.entryFee * game.playerCount * 70n) / 100n)} ETH)</span>
+                            <span className="text-white/80"> (calc. {formatEther((game.entryFee * game.playerCount * 70n) / 100n)} ETH)</span>
                           )}
-                          <span className="text-white/50 ml-1">· 60% / 30% / 10% to Top 3</span>
+                          <span className="text-white/80 ml-1">· 60% / 30% / 10% to Top 3</span>
                         </span>
                       </div>
                     </div>
