@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useReadContract } from 'wagmi';
+import { useReadContract, useAccount } from 'wagmi';
 import { formatEther } from 'viem';
 import { contractABI, CONTRACT_ADDRESS } from '@/lib/contract';
 import StartGameButton from './StartGameButton';
@@ -54,10 +54,24 @@ export default function Sidebar({
   minPlayers,
   onRegistrationSuccess,
 }: SidebarProps) {
+  const { address } = useAccount();
   const [showRegistration, setShowRegistration] = useState(false);
   const [showPrizePoolBreakdown, setShowPrizePoolBreakdown] = useState(false);
   const [showSwap, setShowSwap] = useState(false);
   const [countdown, setCountdown] = useState<string>('');
+
+  // Read player penalties from contract
+  const { data: playerData } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: contractABI,
+    functionName: 'players',
+    args: [BigInt(gameId), address!],
+    query: { enabled: !!address && userStatus !== 'not_registered' },
+  });
+
+  // Extract penalty ETH from player data (index 7 in the tuple)
+  const penaltyETH = playerData ? (playerData as readonly unknown[])[7] as bigint : 0n;
+  const hasPenalties = penaltyETH > 0n;
 
   const { data: finalizationRewardWei } = useReadContract({
     address: CONTRACT_ADDRESS,
@@ -195,6 +209,17 @@ export default function Sidebar({
             )}
             {userStatus === 'eliminated' && (
               <div className="text-[var(--neon-pink)] font-semibold">Eliminated</div>
+            )}
+            {hasPenalties && (
+              <div className="mt-2 pt-2 border-t border-white/10">
+                <div className="text-xs text-[#f59e0b] flex items-center gap-1">
+                  <span>⚠</span>
+                  <span>Penalty: -{formatEther(penaltyETH)} ETH</span>
+                </div>
+                <div className="text-[10px] text-white/40 mt-0.5">
+                  Deducted from game score
+                </div>
+              </div>
             )}
           </div>
         )}

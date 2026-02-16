@@ -60,13 +60,19 @@ export async function fetchPlayerData(
       args: [gameId, playerAddress],
     });
 
-    // getPlayer returns: [squareIndex, startETH, alive, eliminationReason]
-    const [squareIndex, startETH, alive, eliminationReason] = playerData as [
-      number,
-      bigint,
-      boolean,
-      string,
-    ];
+    // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE, alive, eliminationReason]
+    const result = playerData as [number, bigint, bigint, bigint, bigint, bigint, boolean, string];
+    const squareIndex = result[0];
+    const alive = result[6];
+
+    // Get startETH from the players mapping (index 2 in the full struct)
+    const fullPlayerData = await publicClient.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: contractABI,
+      functionName: 'players',
+      args: [gameId, playerAddress],
+    }) as readonly unknown[];
+    const startETH = fullPlayerData[2] as bigint;
 
     const balance = await publicClient.getBalance({ address: playerAddress });
     const gainPercent = startETH > 0n
@@ -102,7 +108,18 @@ export async function calculateRankings(
       functionName: 'getPlayer',
       args: [gameId, address],
     });
-    const [, startETH, alive] = player as [number, bigint, boolean];
+    // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE, alive, eliminationReason]
+    const alive = (player as any)[6] as boolean;
+
+    // Get startETH from players mapping (index 2)
+    const fullData = await publicClient.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: contractABI,
+      functionName: 'players',
+      args: [gameId, address],
+    }) as readonly unknown[];
+    const startETH = fullData[2] as bigint;
+
     const balance = await publicClient.getBalance({ address });
     const gainPct = startETH > 0n
       ? Number((balance - startETH) * 10000n / startETH)

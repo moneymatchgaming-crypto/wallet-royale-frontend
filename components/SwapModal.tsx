@@ -23,6 +23,7 @@ import {
   DEFAULT_FEE,
   DEFAULT_SLIPPAGE_BPS,
 } from '@/lib/uniswap';
+import { CONTRACT_ADDRESS, contractABI } from '@/lib/contract';
 
 interface SwapModalProps {
   onClose: () => void;
@@ -67,6 +68,14 @@ export default function SwapModal({ onClose }: SwapModalProps) {
       window.removeEventListener('mouseup', onUp);
     };
   }, [isDragging]);
+
+  // ── Whitelist verification ───────────────────────────────────────
+  const { data: isRouterApproved } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: contractABI,
+    functionName: 'isProtocolApproved',
+    args: [SWAP_ROUTER_ADDRESS],
+  });
 
   // ── Token & amount state ──────────────────────────────────────────
   const [tokenIn, setTokenIn] = useState<Token>(TOKENS[0]); // ETH
@@ -605,6 +614,16 @@ export default function SwapModal({ onClose }: SwapModalProps) {
               )}
               {buttonLabel}
             </button>
+
+            {/* Whitelist verification indicator */}
+            <div className="mt-3 flex items-center justify-center gap-1.5 text-xs" style={{ color: isRouterApproved ? '#22c55e' : '#f59e0b' }}>
+              <span style={{ fontSize: '10px' }}>{isRouterApproved ? '✓' : '⚠'}</span>
+              <span>
+                {isRouterApproved
+                  ? 'Router whitelisted in game contract'
+                  : 'Router not yet whitelisted — swaps may incur penalties'}
+              </span>
+            </div>
           </div>
 
           {/* Token Selector Overlay */}

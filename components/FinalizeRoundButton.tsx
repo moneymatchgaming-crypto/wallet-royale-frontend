@@ -113,15 +113,19 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
           args: [BigInt(gameId), playerAddr],
         }) as any;
         
-        // getPlayer returns: [squareIndex, startETH, alive, eliminationReason] (Phase 1: no penalties)
+        // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE, alive, eliminationReason]
         const playerArray = Array.isArray(playerData) ? playerData : [
           playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[0],
-          playerData.startETH !== undefined ? playerData.startETH : playerData[1],
-          playerData.alive !== undefined ? playerData.alive : playerData[2],
-          playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[3],
+          playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[1],
+          playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[2],
+          playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[3],
+          playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[4],
+          playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[5],
+          playerData.alive !== undefined ? playerData.alive : playerData[6],
+          playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[7],
         ];
-        
-        isAlive = playerArray[2] === true;
+
+        isAlive = playerArray[6] === true;
         // For getPlayer, we assume registered if we got data back
         isRegistered = true;
       } catch (getPlayerError) {
@@ -133,24 +137,13 @@ async function getEliminatedPlayers(gameId: number, roundNumber: number) {
           args: [BigInt(gameId), playerAddr],
         }) as any;
 
-        // Player struct: [wallet, squareIndex, startETH, startUSDC, startAERO, startCAKE, alive, registered, eliminationReason, registrationTime, eliminationRound]
-        // alive at index 6, registered at index 7
-        const playerArray = Array.isArray(player) ? player : [
-          player.wallet || player[0],
-          player.squareIndex !== undefined ? player.squareIndex : player[1],
-          player.startETH !== undefined ? player.startETH : player[2],
-          player.startUSDC !== undefined ? player.startUSDC : player[3],
-          player.startAERO !== undefined ? player.startAERO : player[4],
-          player.startCAKE !== undefined ? player.startCAKE : player[5],
-          player.alive !== undefined ? player.alive : player[6],
-          player.registered !== undefined ? player.registered : player[7],
-          player.eliminationReason !== undefined ? player.eliminationReason : player[8],
-          player.registrationTime !== undefined ? player.registrationTime : player[9],
-          player.eliminationRound !== undefined ? player.eliminationRound : player[10],
-        ];
-        
-        isAlive = playerArray[6] === true;
-        isRegistered = playerArray[7] === true;
+        // Player struct: [wallet(0), squareIndex(1), startETH(2), startUSDC(3), startAERO(4), startCAKE(5),
+        //   startValueUSDC(6), penaltyETH(7), penaltyUSDC(8), penaltyAERO(9), penaltyCAKE(10),
+        //   alive(11), registered(12), markedForElimination(13), eliminationReason(14), registrationTime(15), eliminationRound(16)]
+        const pArr = Array.isArray(player) ? player : Object.values(player);
+
+        isAlive = pArr[11] === true;
+        isRegistered = pArr[12] === true;
       }
     } catch (rpcError: any) {
       // Handle RPC rate limits and errors
@@ -497,7 +490,7 @@ export default function FinalizeRoundButton({
         address: CONTRACT_ADDRESS,
         abi: contractABI,
         functionName: 'finalizeRound',
-        args: [BigInt(gameId), BigInt(roundNumber)],
+        args: [BigInt(gameId), BigInt(roundNumber), 0n],
         account: address,
       });
       console.log('✓ Simulation passed, sending transaction...');
@@ -505,7 +498,7 @@ export default function FinalizeRoundButton({
         address: CONTRACT_ADDRESS,
         abi: contractABI,
         functionName: 'finalizeRound',
-        args: [BigInt(gameId), BigInt(roundNumber)],
+        args: [BigInt(gameId), BigInt(roundNumber), 0n],
         gas: 2000000n,
       });
       

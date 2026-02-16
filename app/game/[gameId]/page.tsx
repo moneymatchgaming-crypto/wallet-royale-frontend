@@ -388,7 +388,7 @@ export default function GamePage() {
             const losersList: Array<{ address: Address; gainPercent: number; eliminationRound: number }> = [];
             for (const player of players) {
               if (top3Set.has(player.toLowerCase())) continue;
-              // Fetch eliminationRound from the players mapping (index 10)
+              // Fetch eliminationRound from the players mapping (index 16)
               let elimRound = 0;
               try {
                 const playerStruct = await publicClient.readContract({
@@ -397,7 +397,7 @@ export default function GamePage() {
                   functionName: 'players',
                   args: [BigInt(gameId), player],
                 });
-                elimRound = Number((playerStruct as any[])[10] || 0n);
+                elimRound = Number((playerStruct as any[])[16] || 0n);
               } catch (e) {
                 console.warn(`Could not fetch eliminationRound for ${player}:`, e);
               }
@@ -481,15 +481,15 @@ export default function GamePage() {
 
         for (const player of players) {
           try {
-            // Use players mapping to get eliminationRound (index 10) and alive (index 6)
+            // Use players mapping to get eliminationRound (index 16) and alive (index 11)
             const playerStruct = await publicClient.readContract({
               address: CONTRACT_ADDRESS,
               abi: contractABI,
               functionName: 'players',
               args: [BigInt(gameId), player],
             });
-            const isAlive = (playerStruct as any[])[6] === true;
-            const elimRound = Number((playerStruct as any[])[10] || 0n);
+            const isAlive = (playerStruct as any[])[11] === true;
+            const elimRound = Number((playerStruct as any[])[16] || 0n);
             const gainPercent = await calculateGameplayGainPercent(player, isAlive, totalRounds);
 
             if (isAlive) {
@@ -659,8 +659,8 @@ export default function GamePage() {
               args: [BigInt(gameId), player],
             });
             
-            // getPlayer returns [squareIndex, startETH, alive, eliminationReason] — alive at index 2
-            if ((playerData as any)[2] === true) {
+            // getPlayer returns [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE, alive, eliminationReason] — alive at index 6
+            if ((playerData as any)[6] === true) {
               // Use raw ETH balance (no getAdjustedBalances after Phase 1)
               const currentETH = await publicClient.getBalance({ address: player });
               
@@ -798,15 +798,19 @@ export default function GamePage() {
               args: [BigInt(gameId), player],
             });
             
-            // getPlayer returns: [squareIndex, startETH, alive, eliminationReason] (no penalties)
+            // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE, alive, eliminationReason]
             const playerArray = Array.isArray(playerData) ? playerData : [
               playerData.squareIndex !== undefined ? playerData.squareIndex : playerData[0],
-              playerData.startETH !== undefined ? playerData.startETH : playerData[1],
-              playerData.alive !== undefined ? playerData.alive : playerData[2],
-              playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[3],
+              playerData.startValueUSDC !== undefined ? playerData.startValueUSDC : playerData[1],
+              playerData.penaltyETH !== undefined ? playerData.penaltyETH : playerData[2],
+              playerData.penaltyUSDC !== undefined ? playerData.penaltyUSDC : playerData[3],
+              playerData.penaltyAERO !== undefined ? playerData.penaltyAERO : playerData[4],
+              playerData.penaltyCAKE !== undefined ? playerData.penaltyCAKE : playerData[5],
+              playerData.alive !== undefined ? playerData.alive : playerData[6],
+              playerData.eliminationReason !== undefined ? playerData.eliminationReason : playerData[7],
             ];
-            
-            isCurrentlyAlive = playerArray[2] === true;
+
+            isCurrentlyAlive = playerArray[6] === true;
           } catch (error) {
             console.warn(`Failed to fetch player data for ${player}:`, error);
             continue;
@@ -925,14 +929,15 @@ export default function GamePage() {
     );
   }
 
-  // getPlayer returns: [squareIndex, startETH, alive, eliminationReason] (Index 0 = squareIndex, Index 2 = alive)
+  // getPlayer returns: [squareIndex, startValueUSDC, penaltyETH, penaltyUSDC, penaltyAERO, penaltyCAKE, alive, eliminationReason]
+  // Index 0 = squareIndex, Index 6 = alive
   const userStatus = !address
     ? 'not_registered'
     : !userPlayerData
     ? 'not_registered'
-    : (userPlayerData as any)[0] === 0 && (userPlayerData as any)[2] === false // squareIndex = 0 and alive = false = not registered
+    : (userPlayerData as any)[0] === 0 && (userPlayerData as any)[6] === false // squareIndex = 0 and alive = false = not registered
     ? 'not_registered'
-    : (userPlayerData as any)[2] === false // alive = false but squareIndex > 0 = eliminated
+    : (userPlayerData as any)[6] === false // alive = false but squareIndex > 0 = eliminated
     ? 'eliminated'
     : 'registered';
 
